@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: figma_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-figma_db}
+      POSTGRES_USER: ${POSTGRES_USER:-figma_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeMeSecurePassword2026!}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-figma_admin} -d ${POSTGRES_DB:-figma_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - figma_network
+
+  # 2. Redis Cache & Presence State
+  redis:
+    image: redis:7-alpine
+    container_name: figma_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - figma_network
+
+  # 3. Collaborative API & WebSocket Server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: figma_api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-figma_admin}:${POSTGRES_PASSWORD:-ChangeMeSecurePassword2026!}@postgres:5432/${POSTGRES_DB:-figma_db}?schema=public
+      - REDIS_URL=redis://redis:6379
+      - CLIENT_ORIGIN=${CLIENT_ORIGIN:-http://localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - figma_network
+
+  # 4. Web Reverse Proxy & Static Asset Server
+  web:
+    image: nginx:alpine
+    container_name: figma_web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./apps/web/dist:/usr/share/nginx/html:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - figma_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  figma_network:
+    driver: bridge

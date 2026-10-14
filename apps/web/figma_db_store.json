@@ -1,0 +1,33 @@
+{
+  "users": [
+    [
+      "lead@studio.design",
+      {
+        "id": "usr_demo_lead",
+        "email": "lead@studio.design",
+        "name": "Sarah (Design Lead)",
+        "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100",
+        "passwordHash": "demo12345",
+        "createdAt": "2026-10-13T08:52:44.398Z"
+      }
+    ]
+  ],
+  "permissions": [
+    [
+      "demo-doc:usr_demo_lead",
+      {
+        "documentId": "demo-doc",
+        "userId": "usr_demo_lead",
+        "role": "owner"
+      }
+    ]
+  ],
+  "comments": [],
+  "tokens": [
+    [
+      "demo_token_lead",
+      "usr_demo_lead"
+    ]
+  ],
+  "projects": []
+}
