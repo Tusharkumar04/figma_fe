@@ -28,6 +28,7 @@ import {
   Star,
   Triangle,
   Minus,
+  Diamond,
 } from 'lucide-react';
 import { NodeType, ID } from '@figma-app/shared-types';
 
@@ -61,7 +62,7 @@ export const LeftSidebar: React.FC = () => {
 */
 
 export const LeftSidebar: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'layers' | 'assets'>('layers');
+  // const [activeTab, setActiveTab] = useState<'layers' | 'assets'>('layers');
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingNodeName, setEditingNodeName] = useState<string>('');
@@ -96,6 +97,9 @@ export const LeftSidebar: React.FC = () => {
     renamePage,
     deletePage,
     reorderLayers,
+    leftTab: activeTab,
+    setLeftTab: setActiveTab,
+    insertInstance,
   } = useEditorStore();
 
   const activePage = document.pages[activePageId];
@@ -203,6 +207,8 @@ export const LeftSidebar: React.FC = () => {
   };
 
   const selectedPrimaryId = selectedIds.length > 0 ? selectedIds[selectedIds.length - 1] : null;
+
+  const componentEntries = Object.values(document.nodes).filter((node) => node.type === 'component');
 
   /*
   const getChildrenOf = (parentId: string): string[] => {
@@ -335,7 +341,8 @@ export const LeftSidebar: React.FC = () => {
     return false;
   };
 
-  // Root node IDs (not parented to any other node currently on page)
+  /*
+  Original root node lookup (leaked root layers from every other page into the list):
   const rootNodeIds = Object.keys(document.nodes)
     .filter((id) => {
       const node = document.nodes[id];
@@ -348,6 +355,21 @@ export const LeftSidebar: React.FC = () => {
       const idxB = nodeIds.indexOf(b);
       return idxB - idxA;
     });
+  */
+  // Root layers are the current page children without a parent layer, drawn top-most first
+  const rootNodeIds = nodeIds
+    .filter((id) => {
+      const node = document.nodes[id];
+      if (!node) return false;
+      return !node.parent || !document.nodes[node.parent];
+    })
+    .slice()
+    .reverse();
+
+  // Repeatedly nested children count as part of the page's layer tree
+  const countPageNodes = (ids: string[]): number =>
+    ids.reduce((total, id) => total + 1 + countPageNodes(getChildrenOf(id)), 0);
+  const pageLayerCount = countPageNodes(nodeIds);
 
   const renderNodeRow = (id: string, depth = 0) => {
     const node = document.nodes[id];
@@ -374,7 +396,12 @@ export const LeftSidebar: React.FC = () => {
             const rect = e.currentTarget.getBoundingClientRect();
             const relY = e.clientY - rect.top;
             let pos: 'before' | 'after' | 'inside' = 'after';
-            if (node.type === 'group' && relY > 5 && relY < rect.height - 5) {
+            const isContainer =
+              node.type === 'group' ||
+              node.type === 'frame' ||
+              node.type === 'component' ||
+              node.type === 'instance';
+            if (isContainer && relY > 5 && relY < rect.height - 5) {
               pos = 'inside';
             } else if (relY < rect.height / 2) {
               pos = 'before';
@@ -624,10 +651,55 @@ export const LeftSidebar: React.FC = () => {
         </div>
       </div>
 
+      {/* Assets Section */}
+      {activeTab === 'assets' && (
+        <div className="flex-1 overflow-y-auto p-1.5 flex flex-col">
+          <div className="text-[11px] font-semibold text-zinc-400 px-2 py-1 border-b border-[#27272a]/40 pb-1.5 mb-1">
+            COMPONENTS ({componentEntries.length})
+          </div>
+          {componentEntries.length === 0 ? (
+            <div className="text-zinc-500 text-center py-6 px-3 leading-relaxed">
+              No components yet. Select one or more layers and press the diamond
+              &quot;Create Component&quot; button in the toolbar.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1 mt-1">
+              {componentEntries.map((component) => (
+                <div
+                  key={component.id}
+                  onClick={() => setSelectedIds([component.id])}
+                  className={`group flex items-center justify-between gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors ${
+                    selectedIds.includes(component.id)
+                      ? 'bg-blue-600 text-white'
+                      : 'hover:bg-[#242429] text-zinc-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 truncate min-w-0">
+                    <Diamond className="w-3.5 h-3.5 shrink-0 text-purple-400" />
+                    <span className="truncate">{component.name}</span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      insertInstance(component.id);
+                    }}
+                    className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-[#323238] text-zinc-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Insert instance on canvas"
+                  >
+                    Insert
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Layers Section */}
-      <div className="flex-1 overflow-y-auto p-1.5 flex flex-col">
+      <div className={`flex-1 overflow-y-auto p-1.5 flex flex-col ${activeTab === 'layers' ? '' : 'hidden'}`}>
         <div className="text-[11px] font-semibold text-zinc-400 px-2 py-1 flex items-center justify-between border-b border-[#27272a]/40 pb-1.5 mb-1">
-          <span>LAYERS ({nodeIds.length})</span>
+          {/* <span>LAYERS ({nodeIds.length})</span> */}
+          <span>LAYERS ({pageLayerCount})</span>
           {selectedPrimaryId && (
             <div className="flex items-center gap-1 text-zinc-400">
               <button

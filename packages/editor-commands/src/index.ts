@@ -923,3 +923,26 @@ export class ReorderNodesCommand implements Command {
   }
 }
 
+/*
+Snapshot command used for structural edits (layer reordering, container moves) that
+are computed in one pass. Stores the resulting document and restores the previous one.
+*/
+export class DocumentSnapshotCommand implements Command {
+  description: string;
+
+  constructor(
+    private nextDoc: DocumentModel,
+    private prevDoc: DocumentModel,
+    description = 'Edit document'
+  ) {
+    this.description = description;
+  }
+
+  execute(): DocumentModel {
+    return this.nextDoc;
+  }
+
+  undo(): DocumentModel {
+    return this.prevDoc;
+  }
+}

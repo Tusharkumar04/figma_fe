@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useEditorStore } from '../store/editorStore';
+import { SceneNode } from '@figma-app/shared-types';
 import { X, Play, ArrowLeft, RefreshCw, Smartphone } from 'lucide-react';
 
 export const PrototypeViewerModal: React.FC = () => {
@@ -10,6 +11,18 @@ export const PrototypeViewerModal: React.FC = () => {
     activePrototypeFrameId,
     setActivePrototypeFrameId,
   } = useEditorStore();
+
+  // Escape exits the presentation, as advertised by the close button tooltip
+  useEffect(() => {
+    if (!isPrototypeMode) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPrototypeMode(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPrototypeMode, setPrototypeMode]);
 
   if (!isPrototypeMode) return null;
 
@@ -22,6 +35,76 @@ export const PrototypeViewerModal: React.FC = () => {
   const childNodes = activeFrame
     ? Object.values(document.nodes).filter((n) => n.parent === activeFrame.id)
     : [];
+
+  const getChildrenOf = (parentId: string): SceneNode[] => {
+    const parent = document.nodes[parentId];
+    const explicit = (parent?.children || [])
+      .map((id) => document.nodes[id])
+      .filter((n): n is SceneNode => Boolean(n));
+    const byParent = Object.values(document.nodes).filter((n) => n.parent === parentId);
+    return Array.from(new Set([...explicit, ...byParent]));
+  };
+
+  const getBackground = (node: SceneNode): string => {
+    const fill = node.fills?.find((f) => f.visible !== false);
+    if (fill?.type === 'image' && fill.imageUrl) return `url(${fill.imageUrl}) center/cover no-repeat`;
+    return fill?.color || 'transparent';
+  };
+
+  const renderLayerTree = (nodes: SceneNode[]): React.ReactNode =>
+    nodes.map((child) => {
+      if (!activeFrame || child.visible === false) return null;
+      const stroke = child.strokes?.find((s) => s.visible !== false);
+      const relativeX = child.transform.x - activeFrame.transform.x;
+      const relativeY = child.transform.y - activeFrame.transform.y;
+
+      return (
+        <div
+          key={child.id}
+          style={{
+            position: 'absolute',
+            left: `${relativeX}px`,
+            top: `${relativeY}px`,
+            width: `${child.transform.width}px`,
+            height: `${child.transform.height}px`,
+            background: getBackground(child),
+            border: stroke ? `${stroke.width}px solid ${stroke.color}` : undefined,
+            borderRadius:
+              typeof child.cornerRadius === 'number' ? `${child.cornerRadius}px` : undefined,
+            opacity: typeof child.opacity === 'number' ? child.opacity : 1,
+            transform: child.transform.rotation ? `rotate(${child.transform.rotation}deg)` : undefined,
+          }}
+          className={`transition-all hover:ring-2 hover:ring-blue-400/50 select-none ${
+            child.type === 'text' ? '' : 'cursor-pointer'
+          } flex items-center justify-center`}
+          onClick={() => {
+            // Interactive flow simulation: clicking a layer navigates to the next frame
+            const otherFrames = allFrames.filter((f) => f.id !== activeFrame.id);
+            if (otherFrames.length > 0) {
+              setActivePrototypeFrameId(otherFrames[0].id);
+            }
+          }}
+        >
+          {child.type === 'text' ? (
+            <span
+              style={{
+                fontSize: `${(child as any).fontSize || 14}px`,
+                fontFamily: (child as any).fontFamily || 'Inter',
+                fontWeight: (child as any).fontWeight || 400,
+                textAlign: (child as any).textAlign || 'left',
+                color: child.fills?.find((f) => f.visible !== false)?.color || '#ffffff',
+                width: '100%',
+              }}
+              className="px-1"
+            >
+              {(child as any).content}
+            </span>
+          ) : (
+            renderLayerTree(getChildrenOf(child.id))
+          )}
+        </div>
+      );
+    });
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col select-none">
@@ -68,6 +151,7 @@ export const PrototypeViewerModal: React.FC = () => {
       </div>
 
       {/* Screen Presentation Viewport */}
+      {/* Rendered recursively so nested frame/group layers are presented too */}
       <div className="flex-1 overflow-auto flex items-center justify-center p-8 bg-[#0a0a0c]">
         {activeFrame ? (
           <div
@@ -79,50 +163,7 @@ export const PrototypeViewerModal: React.FC = () => {
             }}
             className="relative shadow-2xl rounded-2xl overflow-hidden border border-zinc-700/60 ring-1 ring-white/10"
           >
-            {childNodes.map((child) => {
-              const bg = child.fills?.find((f) => f.visible !== false)?.color || 'transparent';
-              const stroke = child.strokes?.find((s) => s.visible !== false);
-              const relativeX = child.transform.x - activeFrame.transform.x;
-              const relativeY = child.transform.y - activeFrame.transform.y;
-
-              return (
-                <div
-                  key={child.id}
-                  style={{
-                    position: 'absolute',
-                    left: `${relativeX}px`,
-                    top: `${relativeY}px`,
-                    width: `${child.transform.width}px`,
-                    height: `${child.transform.height}px`,
-                    backgroundColor: bg,
-                    border: stroke ? `${stroke.width}px solid ${stroke.color}` : undefined,
-                    borderRadius:
-                      typeof child.cornerRadius === 'number' ? `${child.cornerRadius}px` : undefined,
-                  }}
-                  className="transition-all hover:ring-2 hover:ring-blue-400/50 cursor-pointer flex items-center justify-center select-none"
-                  onClick={() => {
-                    // Interactive flow simulation: if other frames exist, transition on click!
-                    const otherFrames = allFrames.filter((f) => f.id !== activeFrame.id);
-                    if (otherFrames.length > 0) {
-                      setActivePrototypeFrameId(otherFrames[0].id);
-                    }
-                  }}
-                >
-                  {child.type === 'text' && (
-                    <span
-                      style={{
-                        fontSize: `${(child as any).fontSize || 14}px`,
-                        fontWeight: (child as any).fontWeight || 400,
-                        color: child.fills?.find((f) => f.visible !== false)?.color || '#ffffff',
-                      }}
-                      className="px-1 text-center"
-                    >
-                      {(child as any).content}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+            {renderLayerTree(childNodes)}
           </div>
         ) : (
           <div className="text-center text-zinc-500 text-xs">

@@ -86,6 +86,9 @@ export const ToolBar: React.FC = () => {
     setActiveTab,
     isPrototypeMode,
     setPrototypeMode,
+    selectedIds,
+    createComponentFromSelection,
+    setLeftTab,
   } = useEditorStore();
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
@@ -93,6 +96,16 @@ export const ToolBar: React.FC = () => {
   const [selectedShapeTool, setSelectedShapeTool] = useState<string>('rect');
   const [selectedFrameTool, setSelectedFrameTool] = useState<string>('frame');
   const [selectedDrawTool, setSelectedDrawTool] = useState<string>('pen');
+
+  const applyMoveTool = (toolId: string) => {
+    if (toolId === 'hand') setActiveTool('hand');
+    else if (toolId === 'scale') setActiveTool('scale');
+    else setActiveTool('select');
+  };
+
+  const applyDrawTool = (toolId: string) => {
+    setActiveTool(toolId === 'pencil' ? 'pencil' : 'pen');
+  };
 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -242,7 +255,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
 
   // Determine active icon for Move button
   const currentMoveTool = moveTools.find((t) => t.id === selectedMoveTool) || moveTools[0];
-  const isMoveActive = activeTool === 'select' || activeTool === 'hand';
+  const isMoveActive = activeTool === 'select' || activeTool === 'hand' || activeTool === 'scale';
 
   // Determine active icon for Frame button
   const currentFrameTool = frameTools.find((t) => t.id === selectedFrameTool) || frameTools[0];
@@ -255,6 +268,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
 
   // Determine active icon for Draw button
   const currentDrawTool = drawTools.find((t) => t.id === selectedDrawTool) || drawTools[0];
+  const isDrawActive = activeTool === 'pen' || activeTool === 'pencil';
 
   const isTextActive = activeTool === 'text';
 
@@ -266,7 +280,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
   return (
     <div
       ref={toolbarRef}
-      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-white text-zinc-800 rounded-2xl p-1 shadow-[0_8px_32px_rgba(0,0,0,0.18),0_2px_6px_rgba(0,0,0,0.08)] border border-zinc-200/90 select-none transition-all"
+      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-white text-zinc-800 rounded-2xl p-1 shadow-[0_8px_32px_rgba(0,0,0,0.18),0_2px_6px_rgba(0,0,0,0.08)] border border-zinc-200/90 select-none transition-all max-w-[95vw] overflow-x-auto overflow-y-visible"
     >
       <input
         type="file"
@@ -279,13 +293,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
       {/* 1. MOVE / SELECTION TOOL GROUP */}
       <div className="relative flex items-center">
         <button
-          onClick={() => {
-            if (selectedMoveTool === 'hand') {
-              setActiveTool('hand');
-            } else {
-              setActiveTool('select');
-            }
-          }}
+          onClick={() => applyMoveTool(selectedMoveTool)}
           className={`h-9 px-2 flex items-center justify-center rounded-lg transition-colors ${
             isMoveActive
               ? 'bg-[#0d99ff] text-white'
@@ -301,7 +309,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
             openDropdown === 'move'
               ? 'bg-[#e5e5ea] text-zinc-900 rounded-md'
               : isMoveActive
-              ? 'text-white/80 hover:text-white'
+              ? 'text-[#0d99ff] hover:bg-blue-50'
               : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
           }`}
         >
@@ -319,11 +327,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
                   key={tool.id}
                   onClick={() => {
                     setSelectedMoveTool(tool.id as any);
-                    if (tool.id === 'hand') {
-                      setActiveTool('hand');
-                    } else {
-                      setActiveTool('select');
-                    }
+                    applyMoveTool(tool.id);
                     setOpenDropdown(null);
                   }}
                   className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer ${
@@ -371,7 +375,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
             openDropdown === 'frame'
               ? 'bg-[#e5e5ea] text-zinc-900 rounded-md'
               : isFrameActive
-              ? 'text-white/80 hover:text-white'
+              ? 'text-[#0d99ff] hover:bg-blue-50'
               : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
           }`}
         >
@@ -464,7 +468,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
             openDropdown === 'shape'
               ? 'bg-[#e5e5ea] text-zinc-900 rounded-md'
               : isShapeActive
-              ? 'text-white/80 hover:text-white'
+              ? 'text-[#0d99ff] hover:bg-blue-50'
               : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
           }`}
         >
@@ -491,20 +495,24 @@ const MediaIcon = ({ className }: { className?: string }) => (
                     } else if (tool.id === 'arrow') {
                       addNode('line' as NodeType, {
                         name: 'Arrow',
-                        transform: { x: 200, y: 200, width: 120, height: 2, rotation: 0 },
+                        arrow: true,
+                        transform: { x: 200, y: 200, width: 140, height: 0, rotation: 0 },
+                        fills: [],
+                        strokes: [
+                          {
+                            id: createId('stroke'),
+                            color: '#e4e4e7',
+                            width: 2,
+                            align: 'center',
+                            opacity: 1,
+                            visible: true,
+                          },
+                        ],
                       });
                     } else if (tool.id === 'polygon') {
                       setActiveTool('polygon');
-                      addNode('polygon' as NodeType, {
-                        name: 'Polygon',
-                        transform: { x: 200, y: 200, width: 100, height: 100, rotation: 0 },
-                      });
                     } else if (tool.id === 'star') {
                       setActiveTool('star');
-                      addNode('star' as NodeType, {
-                        name: 'Star',
-                        transform: { x: 200, y: 200, width: 100, height: 100, rotation: 0 },
-                      });
                     } else if (tool.id === 'image') {
                       fileInputRef.current?.click();
                     }
@@ -536,8 +544,12 @@ const MediaIcon = ({ className }: { className?: string }) => (
       {/* 4. PEN / DRAW TOOL GROUP */}
       <div className="relative flex items-center">
         <button
-          onClick={() => setActiveTool('select')}
-          className="h-9 px-2 flex items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
+          onClick={() => applyDrawTool(selectedDrawTool)}
+          className={`h-9 px-2 flex items-center justify-center rounded-lg transition-colors ${
+            isDrawActive
+              ? 'bg-[#0d99ff] text-white'
+              : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900'
+          }`}
           title={`${currentDrawTool.label} (${currentDrawTool.shortcut})`}
         >
           <currentDrawTool.icon className="w-4 h-4 stroke-[2]" />
@@ -547,6 +559,8 @@ const MediaIcon = ({ className }: { className?: string }) => (
           className={`h-9 px-1 flex items-center justify-center rounded-r-lg transition-colors -ml-1 ${
             openDropdown === 'draw'
               ? 'bg-[#e5e5ea] text-zinc-900 rounded-md'
+              : isDrawActive
+              ? 'text-[#0d99ff] hover:bg-blue-50'
               : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
           }`}
         >
@@ -563,6 +577,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
                   key={tool.id}
                   onClick={() => {
                     setSelectedDrawTool(tool.id);
+                    applyDrawTool(tool.id);
                     setOpenDropdown(null);
                   }}
                   className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer ${
@@ -605,7 +620,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
           onClick={() => setActiveTool('text')}
           className={`h-9 px-1 flex items-center justify-center rounded-r-lg transition-colors -ml-1 ${
             isTextActive
-              ? 'text-white/80 hover:text-white'
+              ? 'text-[#0d99ff] hover:bg-blue-50'
               : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
           }`}
         >
@@ -630,6 +645,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
       <button
         onClick={() => {
           setActiveTab('design');
+          setLeftTab('assets');
         }}
         className="h-9 w-9 flex items-center justify-center rounded-lg text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
         title="Resources / Components (Shift+I)"
@@ -643,9 +659,16 @@ const MediaIcon = ({ className }: { className?: string }) => (
       {/* 8. RIGHT-SIDE ACTION BUTTONS */}
       {/* Freehand Draw */}
       <button
-        onClick={() => {}}
-        className="h-9 w-9 flex items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
-        title="Freehand Draw"
+        onClick={() => {
+          setSelectedDrawTool('pencil');
+          setActiveTool('pencil');
+        }}
+        className={`h-9 w-9 flex items-center justify-center rounded-lg transition-colors ${
+          activeTool === 'pencil'
+            ? 'bg-[#0d99ff] text-white'
+            : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+        }`}
+        title="Freehand Draw (Shift+P)"
       >
         <Pencil className="w-4 h-4 stroke-[2]" />
       </button>
@@ -669,9 +692,16 @@ const MediaIcon = ({ className }: { className?: string }) => (
 
       {/* Component Symbol */}
       <button
-        onClick={() => {}}
+        onClick={() => {
+          if (selectedIds.length === 0) {
+            setLeftTab('assets');
+            return;
+          }
+          createComponentFromSelection();
+          setLeftTab('assets');
+        }}
         className="h-9 w-9 flex items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
-        title="Create Component"
+        title="Create Component from selection (Ctrl+Alt+K)"
       >
         <Diamond className="w-4 h-4 stroke-[2]" />
       </button>

@@ -7,10 +7,12 @@ import { CanvasEditor } from './editor/canvas/CanvasEditor';
 import { PrototypeViewerModal } from './components/PrototypeViewerModal';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutosave } from './hooks/useAutosave';
+import { useCollaboration } from './hooks/useCollaboration';
 
 export const App: React.FC = () => {
   useKeyboardShortcuts();
   useAutosave();
+  useCollaboration();
 
   return (
     <div className="w-screen h-screen flex flex-col bg-[#121214] text-zinc-200 overflow-hidden">

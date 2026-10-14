@@ -21,16 +21,23 @@ export function loadDocumentLocally(): DocumentModel | null {
   }
 }
 
+/*
+Original API persistence used hard-coded localhost URLs, which cannot work behind a
+reverse proxy or a remote preview host:
+const API_BASE = 'http://localhost:4000';
+*/
+const API_BASE = '';
+
 export async function saveDocumentToApi(doc: DocumentModel): Promise<boolean> {
   try {
-    const res = await fetch(`http://localhost:4000/api/documents/${doc.id}`, {
+    const res = await fetch(`${API_BASE}/api/documents/${doc.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(doc),
     });
     if (!res.ok && res.status === 404) {
       // Create if doesn't exist
-      const createRes = await fetch('http://localhost:4000/api/documents', {
+      const createRes = await fetch(`${API_BASE}/api/documents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(doc),
