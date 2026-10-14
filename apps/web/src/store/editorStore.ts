@@ -18,6 +18,7 @@ import {
   GroupNodesCommand,
   UngroupNodesCommand,
   ReorderNodesCommand,
+  DocumentSnapshotCommand,
 } from '@figma-app/editor-commands';
 
 interface EditorState {
@@ -38,6 +39,8 @@ interface EditorState {
   comments: Comment[];
   isCommentMode: boolean;
   activeTab: 'design' | 'prototype' | 'inspect';
+  leftTab: 'layers' | 'assets';
+  viewport: { width: number; height: number };
 
   setActiveTool: (tool: ToolType) => void;
   setSelectedIds: (ids: ID[]) => void;
@@ -45,18 +48,24 @@ interface EditorState {
   setHoveredId: (id: ID | null) => void;
   setZoom: (zoom: number | ((prev: number) => number)) => void;
   setPan: (pan: Point | ((prev: Point) => Point)) => void;
+  setViewportSize: (width: number, height: number) => void;
+  zoomToFit: () => void;
+  zoomToSelection: () => void;
   setActiveTab: (tab: 'design' | 'prototype' | 'inspect') => void;
+  setLeftTab: (tab: 'layers' | 'assets') => void;
   setPrototypeMode: (active: boolean) => void;
   setActivePrototypeFrameId: (id: ID | null) => void;
   setCommentMode: (active: boolean) => void;
   addComment: (content: string, position: Point) => void;
   resolveComment: (id: ID) => void;
+  upsertCollaborator: (peer: { id: string; name: string; color: string; cursor: Point | null }) => void;
+  removeCollaborator: (peerId: string) => void;
 
   executeCommand: (command: Command) => void;
   undo: () => void;
   redo: () => void;
 
-  addNode: (type: NodeType, overrides?: Partial<SceneNode>) => void;
+  addNode: (type: NodeType, overrides?: Partial<SceneNode>, keepTool?: boolean) => void;
   updateNode: (id: ID, props: Partial<SceneNode>) => void;
   batchUpdateNodes: (updates: { id: ID; newProps: Partial<SceneNode>; prevProps: Partial<SceneNode> }[]) => void;
   deleteSelected: () => void;
@@ -67,6 +76,8 @@ interface EditorState {
   pasteClipboard: () => void | Promise<void>;
   groupSelected: () => void;
   ungroupSelected: () => void;
+  createComponentFromSelection: () => void;
+  insertInstance: (componentId: ID) => void;
   moveLayer: (nodeId: ID, direction: LayerMoveDirection) => void;
   alignSelected: (alignment: AlignmentType) => void;
   distributeSelected: (distribution: DistributionType) => void;
@@ -404,7 +415,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
   initialDoc.nodes[btnText.id] = btnText;
 
   const activePage = initialDoc.pages[initialDoc.activePageId];
+  /*
+  Original seed listed frame children at page root as well, which duplicated them in the
+  layers tree and in canvas hit-testing:
   activePage.children = [frame1.id, card1.id, titleNode.id, btnNode.id, btnText.id];
+  */
+  initialDoc.nodes[frame1.id] = { ...frame1, children: [card1.id, titleNode.id, btnNode.id, btnText.id] };
+  activePage.children = [frame1.id];
 
   return {
     document: initialDoc,
@@ -441,6 +458,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
     ],
     isCommentMode: false,
     activeTab: 'design',
+    leftTab: 'layers',
+    viewport:
+      typeof window !== 'undefined'
+        ? { width: window.innerWidth, height: window.innerHeight }
+        : { width: 1200, height: 800 },
 
     setActiveTool: (tool) => set({ activeTool: tool }),
     setSelectedIds: (ids) => set({ selectedIds: ids }),
@@ -452,15 +474,97 @@ export const useEditorStore = create<EditorState>((set, get) => {
         };
       }),
     setHoveredId: (id) => set({ hoveredId: id }),
+    /*
+    Original zoom setter (did not clamp functional updates):
     setZoom: (zoom) =>
       set((state) => ({
         zoom: typeof zoom === 'function' ? zoom(state.zoom) : Math.max(0.1, Math.min(zoom, 5)),
       })),
+    */
+    setZoom: (zoom) =>
+      set((state) => {
+        const next = typeof zoom === 'function' ? zoom(state.zoom) : zoom;
+        return { zoom: Math.max(0.1, Math.min(next, 5)) };
+      }),
     setPan: (pan) =>
       set((state) => ({
         pan: typeof pan === 'function' ? pan(state.pan) : pan,
       })),
+    setViewportSize: (width, height) =>
+      set((state) => {
+        if (state.viewport.width === width && state.viewport.height === height) return {};
+        return { viewport: { width, height } };
+      }),
+    zoomToFit: () => {
+      const { document, activePageId, viewport } = get();
+      const page = document.pages[activePageId];
+      const roots = (page?.children || [])
+        .map((id) => document.nodes[id])
+        .filter((n): n is SceneNode => Boolean(n));
+      if (roots.length === 0) {
+        set({ zoom: 1, pan: { x: 0, y: 0 } });
+        return;
+      }
+      const minX = Math.min(...roots.map((n) => n.transform.x));
+      const minY = Math.min(...roots.map((n) => n.transform.y));
+      const maxX = Math.max(...roots.map((n) => n.transform.x + n.transform.width));
+      const maxY = Math.max(...roots.map((n) => n.transform.y + n.transform.height));
+      const contentWidth = Math.max(1, maxX - minX);
+      const contentHeight = Math.max(1, maxY - minY);
+      const padding = 64;
+      const vw = viewport.width || window.innerWidth;
+      const vh = viewport.height || window.innerHeight;
+      const scale = Math.max(
+        0.1,
+        Math.min(
+          Math.min((vw - padding * 2) / contentWidth, (vh - padding * 2) / contentHeight),
+          5
+        )
+      );
+      set({
+        zoom: Number(scale.toFixed(4)),
+        pan: {
+          x: vw / 2 - (minX + contentWidth / 2) * scale,
+          y: vh / 2 - (minY + contentHeight / 2) * scale,
+        },
+      });
+    },
+    zoomToSelection: () => {
+      const { document, selectedIds, viewport } = get();
+      const selected = selectedIds
+        .map((id) => document.nodes[id])
+        .filter((n): n is SceneNode => Boolean(n));
+      if (selected.length === 0) {
+        get().zoomToFit();
+        return;
+      }
+      const minX = Math.min(...selected.map((n) => n.transform.x));
+      const minY = Math.min(...selected.map((n) => n.transform.y));
+      const maxX = Math.max(...selected.map((n) => n.transform.x + n.transform.width));
+      const maxY = Math.max(...selected.map((n) => n.transform.y + n.transform.height));
+      const vw = viewport.width || window.innerWidth;
+      const vh = viewport.height || window.innerHeight;
+      const padding = 96;
+      const scale = Math.max(
+        0.1,
+        Math.min(
+          Math.min(
+            (vw - padding * 2) / Math.max(1, maxX - minX),
+            (vh - padding * 2) / Math.max(1, maxY - minY)
+          ),
+          5
+        )
+      );
+      set({
+        zoom: Number(scale.toFixed(4)),
+        pan: {
+          x: vw / 2 - ((minX + maxX) / 2) * scale,
+          y: vh / 2 - ((minY + maxY) / 2) * scale,
+        },
+      });
+    },
     setActiveTab: (tab) => set({ activeTab: tab }),
+    setLeftTab: (tab) => set({ leftTab: tab }),
     setPrototypeMode: (active) => set({ isPrototypeMode: active }),
     setActivePrototypeFrameId: (id) => set({ activePrototypeFrameId: id }),
     setCommentMode: (active) => set({ isCommentMode: active }),
@@ -485,6 +589,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
         comments: state.comments.map((c) => (c.id === id ? { ...c, resolved: true } : c)),
       }));
     },
+    upsertCollaborator: (peer) =>
+      set((state) => ({
+        collaborators: { ...state.collaborators, [peer.id]: peer },
+      })),
+    removeCollaborator: (peerId) =>
+      set((state) => {
+        if (!state.collaborators[peerId]) return {};
+        const nextCollaborators = { ...state.collaborators };
+        delete nextCollaborators[peerId];
+        return { collaborators: nextCollaborators };
+      }),
 
     executeCommand: (command) => {
       const nextDoc = command.execute(get().document);
@@ -496,7 +611,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     undo: () => {
-      const { undoStack, redoStack, document } = get();
+      const { undoStack, redoStack, document, selectedIds } = get();
       if (undoStack.length === 0) return;
       const cmd = undoStack[undoStack.length - 1];
       const nextDoc = cmd.undo(document);
@@ -504,11 +619,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
         document: nextDoc,
         undoStack: undoStack.slice(0, -1),
         redoStack: [...redoStack, cmd],
+        selectedIds: selectedIds.filter((id) => Boolean(nextDoc.nodes[id])),
       });
     },
 
     redo: () => {
-      const { undoStack, redoStack, document } = get();
+      const { undoStack, redoStack, document, selectedIds } = get();
       if (redoStack.length === 0) return;
       const cmd = redoStack[redoStack.length - 1];
       const nextDoc = cmd.execute(document);
@@ -516,14 +632,15 @@ export const useEditorStore = create<EditorState>((set, get) => {
         document: nextDoc,
         undoStack: [...undoStack, cmd],
         redoStack: redoStack.slice(0, -1),
+        selectedIds: selectedIds.filter((id) => Boolean(nextDoc.nodes[id])),
       });
     },
 
-    addNode: (type, overrides = {}) => {
-      const { activePageId, executeCommand } = get();
+    addNode: (type, overrides = {}, keepTool = false) => {
+      const { activePageId, activeTool, executeCommand } = get();
       const node = createNode(type, overrides);
       executeCommand(new AddNodeCommand(node, activePageId));
-      set({ selectedIds: [node.id], activeTool: 'select' });
+      set({ selectedIds: [node.id], activeTool: keepTool ? activeTool : 'select' });
     },
 
     /*
@@ -911,6 +1028,60 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({ selectedIds: Array.from(new Set(allNewSelection)) });
     },
 
+    createComponentFromSelection: () => {
+      const { selectedIds, activePageId, document, executeCommand } = get();
+      const nodes = selectedIds.map((id) => document.nodes[id]).filter(Boolean);
+      if (nodes.length === 0) return;
+
+      const minX = Math.min(...nodes.map((n) => n.transform.x));
+      const minY = Math.min(...nodes.map((n) => n.transform.y));
+      const maxX = Math.max(...nodes.map((n) => n.transform.x + n.transform.width));
+      const maxY = Math.max(...nodes.map((n) => n.transform.y + n.transform.height));
+
+      const firstParent = nodes[0].parent || null;
+      const allShareParent = nodes.every((n) => (n.parent || null) === firstParent);
+      const parentId = allShareParent && firstParent && document.nodes[firstParent] ? firstParent : null;
+
+      const componentCount = Object.values(document.nodes).filter((n) => n.type === 'component').length + 1;
+
+      const componentNode = createNode('component' as NodeType, {
+        name: `Component ${componentCount}`,
+        parent: parentId,
+        transform: {
+          x: minX,
+          y: minY,
+          width: Math.max(10, maxX - minX),
+          height: Math.max(10, maxY - minY),
+          rotation: 0,
+        },
+        children: [...selectedIds],
+        fills: [],
+        strokes: [],
+      });
+
+      executeCommand(new GroupNodesCommand(componentNode, selectedIds, activePageId));
+      set({ selectedIds: [componentNode.id] });
+    },
+
+    insertInstance: (componentId) => {
+      const { document, activePageId, executeCommand } = get();
+      const component = document.nodes[componentId];
+      if (!component || component.type !== 'component') return;
+
+      const { clonedNodes, newRootIds } = cloneSubtree([componentId], document.nodes, { x: 40, y: 40 });
+      if (clonedNodes.length === 0) return;
+
+      clonedNodes.forEach((n) => {
+        if (newRootIds.includes(n.id)) {
+          n.type = 'instance' as NodeType;
+          n.name = `${component.name} Instance`;
+        }
+      });
+
+      executeCommand(new BatchAddNodesCommand(clonedNodes, activePageId));
+      set({ selectedIds: newRootIds });
+    },
+
     moveLayer: (nodeId, direction) => {
       const { activePageId, executeCommand } = get();
       executeCommand(new MoveLayerCommand(nodeId, activePageId, direction));
@@ -935,6 +1106,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     saveStatus: 'saved',
     setSaveStatus: (status) => set({ saveStatus: status }),
+    /*
+    Original loader assumed every stored node was complete:
     loadDocument: (doc) =>
       set({
         document: doc,
@@ -943,6 +1116,48 @@ export const useEditorStore = create<EditorState>((set, get) => {
         undoStack: [],
         redoStack: [],
       }),
+    */
+    loadDocument: (doc) => {
+      // Normalise documents coming from localStorage or an imported file so the
+      // canvas and panels always receive complete nodes.
+      const sourceNodes = doc.nodes || {};
+      const normalizedNodes: Record<ID, SceneNode> = {};
+      Object.keys(sourceNodes).forEach((id) => {
+        const node = sourceNodes[id];
+        if (!node) return;
+        normalizedNodes[id] = {
+          ...node,
+          id: node.id || id,
+          visible: node.visible !== false,
+          locked: node.locked === true,
+          opacity: typeof node.opacity === 'number' ? node.opacity : 1,
+          transform: {
+            x: node.transform?.x ?? 0,
+            y: node.transform?.y ?? 0,
+            width: node.transform?.width ?? 100,
+            height: node.transform?.height ?? 100,
+            rotation: node.transform?.rotation ?? 0,
+          },
+          fills: Array.isArray(node.fills) ? node.fills : [],
+          strokes: Array.isArray(node.strokes) ? node.strokes : [],
+          effects: Array.isArray(node.effects) ? node.effects : [],
+        } as SceneNode;
+      });
+
+      const pages = doc.pages || {};
+      set({
+        document: {
+          ...doc,
+          pages,
+          nodes: normalizedNodes,
+          activePageId: doc.activePageId || Object.keys(pages)[0] || '',
+        },
+        activePageId: doc.activePageId || Object.keys(pages)[0] || '',
+        selectedIds: [],
+        undoStack: [],
+        redoStack: [],
+      });
+    },
 
     selectPage: (pageId) => set({ activePageId: pageId, selectedIds: [] }),
     // renameDocument: (title) =>
@@ -1025,13 +1240,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
     */
     reorderLayers: (sourceId, targetId, position: 'before' | 'after' | 'inside' = 'after') => {
-      const { document, activePageId } = get();
+      const { document, activePageId, executeCommand } = get();
       const page = document.pages[activePageId];
       if (!page || sourceId === targetId) return;
 
       const srcNode = document.nodes[sourceId];
       const tgtNode = document.nodes[targetId];
       if (!srcNode || !tgtNode) return;
+
+      // Prevent re-parenting a container into one of its own descendants
+      let ancestorId: ID | null | undefined = tgtNode.parent;
+      while (ancestorId) {
+        if (ancestorId === sourceId) return;
+        ancestorId = document.nodes[ancestorId]?.parent;
+      }
 
       const nextNodes = { ...document.nodes };
       const nextPages = { ...document.pages };
@@ -1050,7 +1272,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }
 
       // Determine destination container
-      if (tgtNode.type === 'group' && position === 'inside') {
+      const isContainerTarget =
+        tgtNode.type === 'group' ||
+        tgtNode.type === 'frame' ||
+        tgtNode.type === 'component' ||
+        tgtNode.type === 'instance';
+      if (isContainerTarget && position === 'inside') {
         // Drop directly inside group folder
         const tgtChildren = tgtNode.children ? [...tgtNode.children] : [];
         if (!tgtChildren.includes(sourceId)) {
@@ -1104,14 +1331,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
         children: pageChildren,
       };
 
-      set({
-        document: {
-          ...document,
-          nodes: nextNodes,
-          pages: nextPages,
-          updatedAt: new Date().toISOString(),
-        },
-      });
+      const nextDocument = {
+        ...document,
+        nodes: nextNodes,
+        pages: nextPages,
+        updatedAt: new Date().toISOString(),
+      };
+
+      executeCommand(new DocumentSnapshotCommand(nextDocument, document, 'Reorder layers'));
     },
   };
 });

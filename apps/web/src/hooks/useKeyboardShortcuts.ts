@@ -19,6 +19,14 @@ export const useKeyboardShortcuts = () => {
     document: doc,
     activePageId,
     batchUpdateNodes,
+    zoomToFit,
+    zoomToSelection,
+    createComponentFromSelection,
+    setPrototypeMode,
+    isPrototypeMode,
+    setCommentMode,
+    isCommentMode,
+    activeTool,
   } = useEditorStore();
 
   useEffect(() => {
@@ -27,6 +35,61 @@ export const useKeyboardShortcuts = () => {
         document.activeElement instanceof HTMLInputElement ||
         document.activeElement instanceof HTMLTextAreaElement
       ) {
+        return;
+      }
+
+      // Escape: leave prototype preview, cancel the comment tool, or clear the selection
+      if (e.key === 'Escape') {
+        if (isPrototypeMode) {
+          e.preventDefault();
+          setPrototypeMode(false);
+          return;
+        }
+        if (isCommentMode) {
+          e.preventDefault();
+          setCommentMode(false);
+          return;
+        }
+        if (activeTool !== 'select') {
+          setActiveTool('select');
+          return;
+        }
+        if (selectedIds.length > 0) {
+          setSelectedIds([]);
+        }
+        return;
+      }
+
+      // Zoom to fit: Shift+1
+      if (e.shiftKey && (e.key === '!' || e.key === '1')) {
+        e.preventDefault();
+        zoomToFit();
+        return;
+      }
+
+      // Zoom to selection: Shift+2
+      if (e.shiftKey && (e.key === '@' || e.key === '2')) {
+        e.preventDefault();
+        zoomToSelection();
+        return;
+      }
+
+      // Zoom in / out: Ctrl+= and Ctrl+-
+      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        setZoom((z) => z + 0.1);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === '-')) {
+        e.preventDefault();
+        setZoom((z) => z - 0.1);
+        return;
+      }
+
+      // Create component from selection: Ctrl+Alt+K / Cmd+Alt+K
+      if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        createComponentFromSelection();
         return;
       }
 
@@ -142,18 +205,29 @@ export const useKeyboardShortcuts = () => {
         }
       }
 
+      // Tool letters only apply without modifier keys so browser shortcuts stay intact
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       switch (e.key.toLowerCase()) {
         case 'v': setActiveTool('select'); break;
         case 'h': setActiveTool('hand'); break;
+        case 'k': setActiveTool('scale'); break;
         case 'f': setActiveTool('frame'); break;
         case 'r': setActiveTool('rect'); break;
+        case 'l': setActiveTool('line'); break;
         case 'o': setActiveTool('ellipse'); break;
         case 't': setActiveTool('text'); break;
+        case 'p':
+          e.preventDefault();
+          setActiveTool(e.shiftKey ? 'pencil' : 'pen');
+          break;
+        case 'c':
+          e.preventDefault();
+          setCommentMode(!isCommentMode);
+          break;
         case '0':
-          if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            setZoom(1);
-          }
+          e.preventDefault();
+          setZoom(1);
           break;
       }
     };
@@ -200,5 +274,13 @@ export const useKeyboardShortcuts = () => {
     doc,
     activePageId,
     batchUpdateNodes,
+    zoomToFit,
+    zoomToSelection,
+    createComponentFromSelection,
+    setPrototypeMode,
+    isPrototypeMode,
+    setCommentMode,
+    isCommentMode,
+    activeTool,
   ]);
 };

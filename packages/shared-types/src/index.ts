@@ -1,7 +1,8 @@
 export type ID = string;
 
 // export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image';
-export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'star' | 'polygon';
+// export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'star' | 'polygon';
+export type ToolType = 'select' | 'hand' | 'scale' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'star' | 'polygon' | 'pencil' | 'pen';
 
 export interface Point {
   x: number;
@@ -84,6 +85,12 @@ export interface BaseNode {
   strokes: Stroke[];
   effects: Effect[];
   cornerRadius?: number | number[]; // [tl, tr, br, bl]
+}
+
+// Vector/path extras used by the line, pencil, and pen tools
+export interface BaseNode {
+  points?: number[]; // polyline vertices relative to transform origin
+  arrow?: boolean; // renders an arrowhead at the end of a line
 }
 
 export interface FrameNode extends BaseNode {
