@@ -26,14 +26,15 @@ import {
   Droplet,
   Link2,
   LayoutGrid,
+  Eye,
+  EyeOff,
+  Lock,
+  Unlock,
   AlignLeft,
   AlignCenter,
   AlignRight,
   AlignJustify,
   ChevronDown,
-  Lock,
-  Eye,
-  EyeOff,
   Minus,
 } from 'lucide-react';
 import { AlignmentType, DistributionType } from '@figma-app/editor-commands';
@@ -921,16 +922,36 @@ export const RightSidebar: React.FC = () => {
       ) : (
         <>
           {renderAlignmentToolbar()}
-          <div className="p-3 border-b border-[#27272a] flex items-center justify-between">
+          <div className="p-3 border-b border-[#27272a] flex items-center justify-between gap-2">
             <span className="font-semibold text-zinc-100 uppercase text-[11px] tracking-wider">
               {type}
             </span>
-            <input
-              type="text"
-              value={selectedNode.name}
-              onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
-              className="bg-transparent hover:bg-[#27272a] focus:bg-[#27272a] px-1.5 py-0.5 rounded text-right outline-none text-zinc-300 focus:text-white"
-            />
+            <div className="flex items-center gap-1 min-w-0">
+              <input
+                type="text"
+                value={selectedNode.name}
+                onChange={(e) => updateNode(selectedNode.id, { name: e.target.value })}
+                className="bg-transparent hover:bg-[#27272a] focus:bg-[#27272a] px-1.5 py-0.5 rounded text-right outline-none text-zinc-300 focus:text-white min-w-0"
+              />
+              <button
+                onClick={() => updateNode(selectedNode.id, { visible: !selectedNode.visible })}
+                className={`p-1 rounded hover:bg-[#27272a] ${
+                  selectedNode.visible ? 'text-zinc-400 hover:text-white' : 'text-amber-400'
+                }`}
+                title={selectedNode.visible ? 'Hide layer' : 'Show layer'}
+              >
+                {selectedNode.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                onClick={() => updateNode(selectedNode.id, { locked: !selectedNode.locked })}
+                className={`p-1 rounded hover:bg-[#27272a] ${
+                  selectedNode.locked ? 'text-amber-400' : 'text-zinc-400 hover:text-white'
+                }`}
+                title={selectedNode.locked ? 'Unlock layer' : 'Lock layer'}
+              >
+                {selectedNode.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+              </button>
+            </div>
           </div>
 
           <div className="p-3 border-b border-[#27272a]/60 flex flex-col gap-2">
@@ -992,7 +1013,7 @@ export const RightSidebar: React.FC = () => {
               </div>
             </div>
 
-            {(type === 'rect' || type === 'frame') && (
+            {(type === 'rect' || type === 'frame' || type === 'component' || type === 'instance') && (
               <div className="flex items-center bg-[#202024] rounded border border-zinc-800 px-2 py-1 mt-1">
                 <span className="text-zinc-500 mr-2 text-[11px]">Radius</span>
                 <input
@@ -1007,8 +1028,343 @@ export const RightSidebar: React.FC = () => {
                 />
               </div>
             )}
+            <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center bg-[#202024] rounded border border-zinc-800 px-2 py-1 flex-1">
+                <span className="text-zinc-500 mr-2 text-[11px]">Rotate</span>
+                <input
+                  type="number"
+                  value={Math.round(transform.rotation || 0)}
+                  onChange={(e) =>
+                    updateNode(selectedNode.id, {
+                      transform: { ...transform, rotation: parseFloat(e.target.value) || 0 },
+                    })
+                  }
+                  className="bg-transparent w-full outline-none font-mono text-zinc-200"
+                />
+              </div>
+            </div>
           </div>
-          ...
+
+          <div className="p-3 border-b border-[#27272a]/60 flex flex-col gap-2">
+            <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+              Appearance
+            </span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-[#202024] rounded border border-zinc-800 px-2 py-1 flex-1">
+                <span className="text-zinc-500 mr-2 text-[11px]">Opacity</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={Math.round((selectedNode.opacity ?? 1) * 100)}
+                  onChange={(e) =>
+                    updateNode(selectedNode.id, {
+                      opacity: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) / 100,
+                    })
+                  }
+                  className="bg-transparent w-full outline-none font-mono text-zinc-200"
+                />
+                <span className="text-zinc-500 text-[11px]">%</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round((selectedNode.opacity ?? 1) * 100)}
+              onChange={(e) =>
+                updateNode(selectedNode.id, { opacity: parseFloat(e.target.value) / 100 })
+              }
+              className="w-full accent-blue-500 cursor-pointer"
+            />
+          </div>
+
+
+          {type === 'text' && (
+            <div className="p-3 border-b border-[#27272a]/60 flex flex-col gap-2">
+              <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                Typography
+              </span>
+              // <textarea
+              //   value={(selectedNode as any).content || ''}
+              //   onChange={(e) =>
+              //     updateNode(selectedNode.id, { content: e.target.value } as any)
+              //   }
+              //   className="bg-[#202024] border border-zinc-800 rounded p-2 outline-none font-sans text-xs text-white resize-none h-16"
+              // />
+              <textarea
+                value={(selectedNode as any).content || ''}
+                onChange={(e) => {
+                  const newContent = e.target.value;
+                  const fontSize = (selectedNode as any).fontSize || 16;
+                  const fontFamily = (selectedNode as any).fontFamily || 'Inter';
+                  const fontWeight = (selectedNode as any).fontWeight || 500;
+                  const bounds = measureTextBounds(newContent, fontSize, fontFamily, fontWeight);
+                  updateNode(selectedNode.id, {
+                    content: newContent,
+                    transform: {
+                      ...selectedNode.transform,
+                      width: bounds.width,
+                      height: bounds.height,
+                    },
+                  } as any);
+                }}
+                className="bg-[#202024] border border-zinc-800 rounded p-2 outline-none font-sans text-xs text-white resize-none h-16"
+              />
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-[#202024] rounded border border-zinc-800 px-2 py-1 flex-1">
+                  <span className="text-zinc-500 mr-2 text-[11px]">Size</span>
+                  // <input
+                  //   type="number"
+                  //   value={(selectedNode as any).fontSize || 16}
+                  //   onChange={(e) =>
+                  //     updateNode(selectedNode.id, {
+                  //       fontSize: Math.max(8, parseFloat(e.target.value) || 16),
+                  //     } as any)
+                  //   }
+                  //   className="bg-transparent w-full outline-none font-mono text-zinc-200"
+                  // />
+                  <input
+                    type="number"
+                    value={(selectedNode as any).fontSize || 16}
+                    onChange={(e) => {
+                      const newSize = Math.max(8, parseFloat(e.target.value) || 16);
+                      const content = (selectedNode as any).content || 'Text';
+                      const fontFamily = (selectedNode as any).fontFamily || 'Inter';
+                      const fontWeight = (selectedNode as any).fontWeight || 500;
+                      const bounds = measureTextBounds(content, newSize, fontFamily, fontWeight);
+                      updateNode(selectedNode.id, {
+                        fontSize: newSize,
+                        transform: {
+                          ...selectedNode.transform,
+                          width: bounds.width,
+                          height: bounds.height,
+                        },
+                      } as any);
+                    }}
+                    className="bg-transparent w-full outline-none font-mono text-zinc-200"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={(selectedNode as any).fontFamily || 'Inter'}
+                  onChange={(e) =>
+                    updateNode(selectedNode.id, { fontFamily: e.target.value } as any)
+                  }
+                  className="bg-[#202024] border border-zinc-800 rounded px-2 py-1 flex-1 outline-none text-zinc-200"
+                >
+                  {['Inter', 'Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Courier New', 'Verdana'].map(
+                    (font) => (
+                      <option key={font} value={font}>
+                        {font}
+                      </option>
+                    )
+                  )}
+                </select>
+                <select
+                  value={String((selectedNode as any).fontWeight || 500)}
+                  onChange={(e) =>
+                    updateNode(selectedNode.id, { fontWeight: e.target.value } as any)
+                  }
+                  className="bg-[#202024] border border-zinc-800 rounded px-2 py-1 w-24 outline-none text-zinc-200"
+                >
+                  {['300', '400', '500', '600', '700', '800'].map((weight) => (
+                    <option key={weight} value={weight}>
+                      {weight}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1 bg-[#202024] border border-zinc-800 rounded p-0.5">
+                {([
+                  { id: 'left', Icon: AlignLeft },
+                  { id: 'center', Icon: AlignCenter },
+                  { id: 'right', Icon: AlignRight },
+                  { id: 'justify', Icon: AlignJustify },
+                ] as const).map(({ id: alignId, Icon }) => (
+                  <button
+                    key={alignId}
+                    onClick={() => updateNode(selectedNode.id, { textAlign: alignId } as any)}
+                    title={`Align ${alignId}`}
+                    className={`p-1.5 rounded flex-1 flex items-center justify-center transition-colors ${
+                      ((selectedNode as any).textAlign || 'left') === alignId
+                        ? 'bg-blue-600 text-white'
+                        : 'text-zinc-400 hover:bg-[#27272a] hover:text-white'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-[#202024] rounded border border-zinc-800 px-2 py-1 flex-1">
+                  <span className="text-zinc-500 mr-2 text-[11px]">Line</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    value={(selectedNode as any).lineHeight ?? 1.4}
+                    onChange={(e) =>
+                      updateNode(selectedNode.id, {
+                        lineHeight: parseFloat(e.target.value) || 1.4,
+                      } as any)
+                    }
+                    className="bg-transparent w-full outline-none font-mono text-zinc-200"
+                  />
+                </div>
+                <div className="flex items-center bg-[#202024] rounded border border-zinc-800 px-2 py-1 flex-1">
+                  <span className="text-zinc-500 mr-2 text-[11px]">Letter</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    value={(selectedNode as any).letterSpacing ?? 0}
+                    onChange={(e) =>
+                      updateNode(selectedNode.id, {
+                        letterSpacing: parseFloat(e.target.value) || 0,
+                      } as any)
+                    }
+                    className="bg-transparent w-full outline-none font-mono text-zinc-200"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="p-3 border-b border-[#27272a]/60 flex flex-col gap-2">
+            // Fill label (commented out)
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                Fill
+              </span>
+              <button
+                onClick={() =>
+                  updateNode(selectedNode.id, {
+                    fills: [
+                      ...fills,
+                      { id: `f_${Date.now()}`, type: 'solid', color: '#3b82f6', opacity: 1, visible: true },
+                    ],
+                  })
+                }
+                className="hover:text-white"
+                title="Add Fill"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {fills.map((fill, index) => (
+              <div
+                className="flex items-center gap-2 bg-[#202024] p-1.5 rounded border border-zinc-800"
+                key={fill.id || index}
+              >
+                <input
+                  type="color"
+                  value={fill.color || '#ffffff'}
+                  onChange={(e) => {
+                    const n = [...fills];
+                    n[index] = { ...fill, color: e.target.value };
+                    updateNode(selectedNode.id, { fills: n });
+                  }}
+                  className="w-6 h-6 rounded border border-zinc-700 bg-transparent cursor-pointer p-0"
+                />
+                <input
+                  type="text"
+                  value={fill.color || '#ffffff'}
+                  onChange={(e) => {
+                    const n = [...fills];
+                    n[index] = { ...fill, color: e.target.value };
+                    updateNode(selectedNode.id, { fills: n });
+                  }}
+                  className="bg-transparent font-mono text-[11px] w-20 outline-none uppercase text-zinc-200"
+                />
+                <button
+                  onClick={() => {
+                    const n = [...fills];
+                    n[index] = { ...fill, visible: fill.visible === false };
+                    updateNode(selectedNode.id, { fills: n });
+                  }}
+                  className={`ml-auto p-1 hover:text-white ${
+                    fill.visible === false ? 'text-amber-400' : 'text-zinc-500'
+                  }`}
+                  title={fill.visible === false ? 'Show fill' : 'Hide fill'}
+                >
+                  {fill.visible === false ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                </button>
+                <button
+                  onClick={() =>
+                    updateNode(selectedNode.id, { fills: fills.filter((_, i) => i !== index) })
+                  }
+                  className="p-1 text-zinc-500 hover:text-rose-400"
+                  title="Remove fill"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                Stroke
+              </span>
+              <button
+                onClick={() =>
+                  updateNode(selectedNode.id, {
+                    strokes: [
+                      ...strokes,
+                      { id: `s_${Date.now()}`, color: '#38bdf8', width: 1, visible: true },
+                    ],
+                  })
+                }
+                className="hover:text-white"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {strokes.map((stroke, index) => (
+              <div
+                key={stroke.id || index}
+                className="flex items-center gap-2 bg-[#202024] p-1.5 rounded border border-zinc-800"
+              >
+                <input
+                  type="color"
+                  value={stroke.color}
+                  onChange={(e) => {
+                    const n = [...strokes];
+                    n[index] = { ...stroke, color: e.target.value };
+                    updateNode(selectedNode.id, { strokes: n });
+                  }}
+                  className="w-6 h-6 rounded border border-zinc-700 bg-transparent cursor-pointer p-0"
+                />
+                <input
+                  type="number"
+                  value={stroke.width}
+                  onChange={(e) => {
+                    const n = [...strokes];
+                    n[index] = {
+                      ...stroke,
+                      width: Math.max(1, parseFloat(e.target.value) || 1),
+                    };
+                    updateNode(selectedNode.id, { strokes: n });
+                  }}
+                  className="bg-transparent font-mono text-[11px] w-12 outline-none text-zinc-200"
+                />
+                <button
+                  onClick={() =>
+                    updateNode(selectedNode.id, {
+                      strokes: strokes.filter((_, i) => i !== index),
+                    })
+                  }
+                  className="hover:text-rose-400 ml-auto p-1"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
         </>
       )}
     </aside>

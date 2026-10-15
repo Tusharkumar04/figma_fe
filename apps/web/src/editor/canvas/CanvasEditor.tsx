@@ -1,11 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
 // import { Stage, Layer, Rect, Circle, Text, Group, Transformer } from 'react-konva';
-// import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line } from 'react-konva';
-// import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line, Shape } from 'react-konva';
 import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line, Shape, Image as KonvaImage } from 'react-konva';
 import { useEditorStore } from '../../store/editorStore';
 import { SceneNode, NodeType, Point } from '@figma-app/shared-types';
-import { measureTextBounds } from '@figma-app/document-model';
+import { measureTextBounds, createId } from '@figma-app/document-model';
 import Konva from 'konva';
 
 const KonvaImageNode: React.FC<{
@@ -69,6 +67,18 @@ export const CanvasEditor: React.FC = () => {
   const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [pencilPoints, setPencilPoints] = useState<number[]>([]);
+  const [penPoints, setPenPoints] = useState<number[]>([]);
+  const [penCursor, setPenCursor] = useState<Point | null>(null);
+  const [pendingComment, setPendingComment] = useState<{ x: number; y: number } | null>(null);
+  const [pendingCommentText, setPendingCommentText] = useState('');
+  const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const [imageCache, setImageCache] = useState<Record<string, HTMLImageElement>>({});
+  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(
+    null
+  );
+  const scaleGestureRef = useRef<{ center: Point; startDistance: number; nodeIds: string[] } | null>(null);
+  const scaleFactorRef = useRef(1);
 
   const {
     document,
@@ -81,16 +91,29 @@ export const CanvasEditor: React.FC = () => {
     setZoom,
     pan,
     setPan,
+    setViewportSize,
     updateNode,
     batchUpdateNodes,
     addNode,
     collaborators,
     comments,
     resolveComment,
+    isCommentMode,
+    addComment,
+    copySelected,
+    pasteClipboard,
+    duplicateSelected,
+    deleteSelected,
+    groupSelected,
+    ungroupSelected,
+    moveLayer,
+    zoomToFit,
+    setActiveTool,
   } = useEditorStore();
 
-  // const isCreationTool = ['frame', 'rect', 'ellipse', 'text', 'star', 'polygon', 'line'].includes(activeTool);
   const isCreationTool = ['frame', 'rect', 'ellipse', 'text', 'star', 'polygon', 'line', 'textOnPath'].includes(activeTool);
+  const isPathTool = activeTool === 'pencil' || activeTool === 'pen';
+  const isPanningTool = activeTool === 'hand' || isSpaceDown;
 
   // const activePage = document.pages[activePageId];
   const activePage = document?.pages ? document.pages[activePageId] : undefined;
@@ -99,16 +122,60 @@ export const CanvasEditor: React.FC = () => {
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
-        setDimensions({
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight,
-        });
+        const width = containerRef.current.offsetWidth;
+        const height = containerRef.current.offsetHeight;
+        setDimensions({ width, height });
+        setViewportSize(width, height);
       }
     };
     updateSize();
     window.addEventListener('resize', updateSize);
     return () => window.removeEventListener('resize', updateSize);
+  }, [setViewportSize]);
+
+  // Spacebar temporarily enables the hand tool (Figma behaviour)
+  useEffect(() => {
+    const isFieldFocused = () => {
+      const el = window.document.activeElement;
+      return (
+        !!el &&
+        (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable)
+      );
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || isFieldFocused()) return;
+      e.preventDefault();
+      setIsSpaceDown(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') setIsSpaceDown(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
   }, []);
+
+  // Preload every bitmap used on the canvas so image layers can be painted by Konva
+  useEffect(() => {
+    const urls = new Set<string>();
+    Object.values(document.nodes).forEach((node) => {
+      const src = (node as any).src;
+      if (node.type === 'image' && typeof src === 'string' && src) urls.add(src);
+      (node.fills || []).forEach((fill) => {
+        if (fill.type === 'image' && fill.imageUrl) urls.add(fill.imageUrl);
+      });
+    });
+    urls.forEach((url) => {
+      if (imageCache[url]) return;
+      const img = new window.Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => setImageCache((prev) => ({ ...prev, [url]: img }));
+      img.src = url;
+    });
+  }, [document, imageCache]);
 
   useEffect(() => {
     if (!transformerRef.current || !stageRef.current) return;
@@ -117,7 +184,8 @@ export const CanvasEditor: React.FC = () => {
     const selectedNodes = selectedIds
       .filter((id) => {
         const node = document.nodes[id];
-        return node && isNodeEffectivelyVisible(node);
+        // Locked layers keep their selection but expose no transform handles
+        return node && isNodeEffectivelyVisible(node) && !isNodeEffectivelyLocked(node);
       })
       .map((id) => stage.findOne(`#${id}`))
       .filter((node): node is Konva.Node => !!node);
@@ -193,11 +261,24 @@ export const CanvasEditor: React.FC = () => {
           rotation: Math.round(konvaNode.rotation()),
         };
 
-        updates.push({
-          id,
-          newProps: { transform: newTransform },
-          prevProps: { transform: { ...docNode.transform } },
-        });
+        // Path layers (pencil/pen strokes) scale their vertices together with the box
+        const docPoints = (docNode as any).points as number[] | undefined;
+        if (docPoints && docPoints.length >= 4) {
+          const scaledPoints = docPoints.map((value, index) =>
+            Math.round((index % 2 === 0 ? value * sx : value * sy) * 100) / 100
+          );
+          updates.push({
+            id,
+            newProps: { transform: newTransform, points: scaledPoints } as any,
+            prevProps: { transform: { ...docNode.transform }, points: docPoints } as any,
+          });
+        } else {
+          updates.push({
+            id,
+            newProps: { transform: newTransform },
+            prevProps: { transform: { ...docNode.transform } },
+          });
+        }
 
         if (docNode.children && docNode.children.length > 0) {
           const descendantIds = getAllDescendantIds(docNode.id, document.nodes);
@@ -260,8 +341,210 @@ export const CanvasEditor: React.FC = () => {
     }
   };
 
+  const getPointerInCanvasSpace = (): Point | null => {
+    const stage = stageRef.current;
+    const pointer = stage?.getPointerPosition();
+    if (!pointer) return null;
+    return { x: (pointer.x - pan.x) / zoom, y: (pointer.y - pan.y) / zoom };
+  };
+
+  const getSelectionCenter = (): Point => {
+    const nodes = selectedIds.map((id) => document.nodes[id]).filter(Boolean) as SceneNode[];
+    if (nodes.length === 0) return { x: 0, y: 0 };
+    const minX = Math.min(...nodes.map((n) => n.transform.x));
+    const minY = Math.min(...nodes.map((n) => n.transform.y));
+    const maxX = Math.max(...nodes.map((n) => n.transform.x + n.transform.width));
+    const maxY = Math.max(...nodes.map((n) => n.transform.y + n.transform.height));
+    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  };
+
+  const isCenteredShape = (node: SceneNode) =>
+    node.type === 'ellipse' || node.type === 'star' || node.type === 'polygon';
+
+  const getShapeAnchor = (node: SceneNode): Point => {
+    if (isCenteredShape(node)) {
+      return {
+        x: node.transform.x + node.transform.width / 2,
+        y: node.transform.y + node.transform.height / 2,
+      };
+    }
+    return { x: node.transform.x, y: node.transform.y };
+  };
+
+  const buildPathOverrides = (points: number[], strokeColor = '#e4e4e7', strokeWidth = 2) => {
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (let i = 0; i < points.length; i += 2) {
+      xs.push(points[i]);
+      ys.push(points[i + 1]);
+    }
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+    const relativePoints = points.map((value, index) => (index % 2 === 0 ? value - minX : value - minY));
+    return {
+      points: relativePoints,
+      transform: {
+        x: Math.round(minX),
+        y: Math.round(minY),
+        width: Math.max(1, Math.round(maxX - minX)),
+        height: Math.max(1, Math.round(maxY - minY)),
+        rotation: 0,
+      },
+      fills: [],
+      strokes: [
+        {
+          id: createId('stroke'),
+          color: strokeColor,
+          width: strokeWidth,
+          align: 'center' as const,
+          opacity: 1,
+          visible: true,
+        },
+      ],
+    };
+  };
+
+  const finishFreehandPath = () => {
+    if (pencilPoints.length >= 4) {
+      addNode('line' as NodeType, buildPathOverrides(pencilPoints), true);
+    }
+    setPencilPoints([]);
+    setIsDrawing(false);
+  };
+
+  const finishPenPath = () => {
+    if (penPoints.length >= 4) {
+      addNode('line' as NodeType, buildPathOverrides(penPoints, '#3b82f6', 2), true);
+    }
+    setPenPoints([]);
+    setPenCursor(null);
+  };
+
+  const applyScalePreview = (canvasPoint: Point) => {
+    const gesture = scaleGestureRef.current;
+    const stage = stageRef.current;
+    if (!gesture || !stage) return;
+    const distance = Math.max(1, Math.hypot(canvasPoint.x - gesture.center.x, canvasPoint.y - gesture.center.y));
+    const factor = Math.max(0.05, Math.min(distance / gesture.startDistance, 20));
+    scaleFactorRef.current = factor;
+    gesture.nodeIds.forEach((id) => {
+      const konvaNode = stage.findOne(`#${id}`);
+      const docNode = document.nodes[id];
+      if (!konvaNode || !docNode) return;
+      const anchor = getShapeAnchor(docNode);
+      konvaNode.position({
+        x: gesture.center.x + (anchor.x - gesture.center.x) * factor,
+        y: gesture.center.y + (anchor.y - gesture.center.y) * factor,
+      });
+      konvaNode.scaleX(factor);
+      konvaNode.scaleY(factor);
+    });
+    stage.batchDraw();
+  };
+
+  const commitScaleGesture = () => {
+    const gesture = scaleGestureRef.current;
+    const stage = stageRef.current;
+    const factor = scaleFactorRef.current;
+    scaleGestureRef.current = null;
+    scaleFactorRef.current = 1;
+    if (!gesture) return;
+
+    if (stage) {
+      gesture.nodeIds.forEach((id) => {
+        const konvaNode = stage.findOne(`#${id}`);
+        if (konvaNode) {
+          konvaNode.scaleX(1);
+          konvaNode.scaleY(1);
+        }
+      });
+      stage.batchDraw();
+    }
+
+    if (Math.abs(factor - 1) < 0.001) return;
+
+    const idsToScale = new Set<string>();
+    gesture.nodeIds.forEach((id) => {
+      idsToScale.add(id);
+      getAllDescendantIds(id, document.nodes).forEach((childId) => idsToScale.add(childId));
+    });
+
+    const updates: { id: string; newProps: Partial<SceneNode>; prevProps: Partial<SceneNode> }[] = [];
+    idsToScale.forEach((id) => {
+      const docNode = document.nodes[id];
+      if (!docNode) return;
+      const anchor = getShapeAnchor(docNode);
+      const newWidth = Math.max(1, docNode.transform.width * factor);
+      const newHeight = Math.max(1, docNode.transform.height * factor);
+      const newAnchorX = gesture.center.x + (anchor.x - gesture.center.x) * factor;
+      const newAnchorY = gesture.center.y + (anchor.y - gesture.center.y) * factor;
+      const nextTransform = {
+        ...docNode.transform,
+        x: Math.round(isCenteredShape(docNode) ? newAnchorX - newWidth / 2 : newAnchorX),
+        y: Math.round(isCenteredShape(docNode) ? newAnchorY - newHeight / 2 : newAnchorY),
+        width: Math.round(newWidth),
+        height: Math.round(newHeight),
+      };
+      const newProps: Partial<SceneNode> = { transform: nextTransform };
+      if (docNode.type === 'text') {
+        (newProps as any).fontSize = Math.max(
+          4,
+          Math.round((((docNode as any).fontSize || 16) * factor))
+        );
+      }
+      updates.push({ id, newProps, prevProps: { transform: { ...docNode.transform } } });
+    });
+
+    if (updates.length > 0) {
+      batchUpdateNodes(updates);
+    }
+  };
+
+  const commitComment = () => {
+    if (!pendingComment) return;
+    const text = (pendingCommentText || '').trim();
+    addComment(text || 'New comment', { x: pendingComment.x, y: pendingComment.y });
+    setPendingComment(null);
+    setPendingCommentText('');
+  };
+
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (activeTool === 'hand') return;
+    if (isPanningTool) return;
+
+    const canvasPoint = getPointerInCanvasSpace();
+
+    if (isCommentMode && canvasPoint) {
+      setActiveCommentId(null);
+      setPendingComment(canvasPoint);
+      return;
+    }
+
+    if (activeTool === 'pencil' && canvasPoint) {
+      setIsDrawing(true);
+      setPencilPoints([canvasPoint.x, canvasPoint.y]);
+      return;
+    }
+
+    if (activeTool === 'pen' && canvasPoint) {
+      setPenPoints((prev) => [...prev, canvasPoint.x, canvasPoint.y]);
+      setPenCursor(canvasPoint);
+      return;
+    }
+
+    const clickedNodeId = e.target === stageRef.current ? null : e.target.id();
+    const clickedInsideSelection = !clickedNodeId || selectedIds.includes(clickedNodeId);
+
+    if (activeTool === 'scale' && canvasPoint && selectedIds.length > 0 && clickedInsideSelection) {
+      const center = getSelectionCenter();
+      scaleGestureRef.current = {
+        center,
+        startDistance: Math.max(1, Math.hypot(canvasPoint.x - center.x, canvasPoint.y - center.y)),
+        nodeIds: [...selectedIds],
+      };
+      return;
+    }
 
     if (isCreationTool) {
       const stage = stageRef.current;
@@ -305,16 +588,48 @@ export const CanvasEditor: React.FC = () => {
   };
 
   const handleStageMouseMove = () => {
+    const canvasPoint = getPointerInCanvasSpace();
+    if (!canvasPoint) return;
+    const canvasX = canvasPoint.x;
+    const canvasY = canvasPoint.y;
+
+    if (activeTool === 'pencil' && isDrawing) {
+      setPencilPoints((prev) => {
+        const lastX = prev[prev.length - 2];
+        const lastY = prev[prev.length - 1];
+        if (lastX !== undefined && Math.abs(lastX - canvasX) < 1.5 && Math.abs(lastY - canvasY) < 1.5) {
+          return prev;
+        }
+        return [...prev, canvasX, canvasY];
+      });
+      return;
+    }
+
+    if (activeTool === 'pen' && penPoints.length > 0) {
+      setPenCursor({ x: canvasX, y: canvasY });
+      return;
+    }
+
+    if (scaleGestureRef.current) {
+      applyScalePreview(canvasPoint);
+      return;
+    }
+
     if (!isDrawing || !drawStart) return;
-    const stage = stageRef.current;
-    const pointer = stage?.getPointerPosition();
-    if (!pointer) return;
-    const canvasX = (pointer.x - pan.x) / zoom;
-    const canvasY = (pointer.y - pan.y) / zoom;
     setDrawCurrent({ x: canvasX, y: canvasY });
   };
 
-  const handleStageMouseUp = () => {
+  const handleStageMouseUp = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (activeTool === 'pencil' && isDrawing) {
+      finishFreehandPath();
+      return;
+    }
+
+    if (scaleGestureRef.current) {
+      commitScaleGesture();
+      return;
+    }
+
     if (!isDrawing || !drawStart || !drawCurrent) return;
 
     if (activeTool === 'select') {
@@ -326,20 +641,41 @@ export const CanvasEditor: React.FC = () => {
       const height = y2 - y1;
 
       if (width > 4 || height > 4) {
-        const hits: string[] = [];
-        nodeIds.forEach((id) => {
+        const candidateSet = new Set<string>();
+        const collectPageNodes = (ids: string[]) => {
+          ids.forEach((id) => {
+            if (!document.nodes[id] || candidateSet.has(id)) return;
+            candidateSet.add(id);
+            collectPageNodes(getChildrenOf(id, document.nodes));
+          });
+        };
+        collectPageNodes(nodeIds);
+        const candidates = Array.from(candidateSet);
+
+        const hits = candidates.filter((id) => {
           const n = document.nodes[id];
-          if (!n) return;
+          if (!n || !n.visible) return false;
           const nx1 = n.transform.x;
           const ny1 = n.transform.y;
           const nx2 = nx1 + n.transform.width;
           const ny2 = ny1 + n.transform.height;
-          if (nx1 < x2 && nx2 > x1 && ny1 < y2 && ny2 > y1) {
-            hits.push(id);
-          }
+          return nx1 < x2 && nx2 > x1 && ny1 < y2 && ny2 > y1;
         });
-        if (hits.length > 0) {
-          setSelectedIds(hits);
+
+        const hitSet = new Set(hits);
+        const topHits = hits.filter((id) => {
+          let ancestor = document.nodes[id]?.parent;
+          while (ancestor) {
+            if (hitSet.has(ancestor)) return false;
+            ancestor = document.nodes[ancestor]?.parent;
+          }
+          return true;
+        });
+
+        if (topHits.length > 0) {
+          setSelectedIds(
+            e.evt.shiftKey ? Array.from(new Set([...selectedIds, ...topHits])) : topHits
+          );
         }
       }
       setIsDrawing(false);
@@ -395,12 +731,74 @@ export const CanvasEditor: React.FC = () => {
       },
     });
 
+    // Text layers start editing immediately, matching the Figma text workflow
+    if (activeTool === 'text') {
+      const createdId = useEditorStore.getState().selectedIds[0];
+      if (createdId) setEditingTextId(createdId);
+    }
+
     setIsDrawing(false);
     setDrawStart(null);
     setDrawCurrent(null);
   };
 
+  // Pen tool: Enter finishes the polyline, Escape cancels it
+  useEffect(() => {
+    if (activeTool !== 'pen') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finishPenPath();
+      } else if (e.key === 'Escape') {
+        setPenPoints([]);
+        setPenCursor(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTool, penPoints]);
+
   const renderCreationPreview = () => {
+    if (activeTool === 'pencil' && pencilPoints.length >= 4) {
+      return (
+        <Line
+          points={pencilPoints}
+          stroke="#3b82f6"
+          strokeWidth={2 / zoom}
+          lineCap="round"
+          lineJoin="round"
+          listening={false}
+        />
+      );
+    }
+
+    if (activeTool === 'pen' && penPoints.length >= 2) {
+      const livePoints =
+        penCursor && penPoints.length >= 2
+          ? [...penPoints, penCursor.x, penCursor.y]
+          : penPoints;
+      return (
+        <>
+          <Line
+            points={livePoints}
+            stroke="#3b82f6"
+            strokeWidth={1.5 / zoom}
+            dash={[4 / zoom, 4 / zoom]}
+            listening={false}
+          />
+          {penPoints.length >= 2 && (
+            <Circle
+              x={penPoints[penPoints.length - 2]}
+              y={penPoints[penPoints.length - 1]}
+              radius={3 / zoom}
+              fill="#3b82f6"
+              listening={false}
+            />
+          )}
+        </>
+      );
+    }
+
     if (!isDrawing || !drawStart || !drawCurrent) return null;
 
     const x = Math.min(drawStart.x, drawCurrent.x);
@@ -546,7 +944,10 @@ export const CanvasEditor: React.FC = () => {
   const renderNode = (node: SceneNode) => {
     if (!isNodeEffectivelyVisible(node)) return null;
     const isLocked = isNodeEffectivelyLocked(node);
-    const fillProp = node.fills.find((f) => f.visible !== false)?.color || 'transparent';
+    const activeFill = node.fills.find((f) => f.visible !== false);
+    const fillProp = activeFill?.color || 'transparent';
+    const imageUrl = activeFill?.type === 'image' ? activeFill.imageUrl : (node as any).src;
+    const loadedImage = imageUrl ? imageCache[imageUrl] : undefined;
     const strokeObj = node.strokes.find((s) => s.visible !== false);
     const strokeProp = strokeObj?.color;
     const strokeWidthProp = strokeObj?.width;
@@ -572,9 +973,25 @@ export const CanvasEditor: React.FC = () => {
       x: node.transform.x,
       y: node.transform.y,
       ...shadowProps,
+      rotation: node.transform.rotation || 0,
+      opacity: typeof node.opacity === 'number' ? node.opacity : 1,
+      listening: !isLocked,
       draggable: !isLocked && activeTool === 'select',
+      onContextMenu: (e: any) => {
+        if (isCreationTool || isPathTool || isCommentMode) return;
+        e.evt.preventDefault();
+        e.cancelBubble = true;
+        const targetId = getTopGroupOrSelf(node.id, document.nodes);
+        if (!selectedIds.includes(targetId)) setSelectedIds([targetId]);
+        const rect = containerRef.current?.getBoundingClientRect();
+        setCanvasMenu({
+          x: e.evt.clientX - (rect?.left || 0),
+          y: e.evt.clientY - (rect?.top || 0),
+          nodeId: targetId,
+        });
+      },
       onClick: (e: any) => {
-        if (isCreationTool) return;
+        if (isCreationTool || isPathTool || isCommentMode) return;
         e.cancelBubble = true;
         const targetId = (e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey)
           ? node.id
@@ -583,7 +1000,7 @@ export const CanvasEditor: React.FC = () => {
         else setSelectedIds([targetId]);
       },
       onDblClick: (e: any) => {
-        if (isCreationTool) return;
+        if (isCreationTool || isPathTool || isCommentMode) return;
         e.cancelBubble = true;
         setSelectedIds([node.id]);
       },
@@ -768,6 +1185,19 @@ export const CanvasEditor: React.FC = () => {
     }
 
     if (node.type === 'rect') {
+      if (loadedImage) {
+        return (
+          <KonvaImage
+            key={node.id}
+            {...commonProps}
+            image={loadedImage}
+            width={node.transform.width}
+            height={node.transform.height}
+            stroke={strokeProp}
+            strokeWidth={strokeWidthProp}
+          />
+        );
+      }
       return (
         <Rect
           key={node.id}
@@ -783,6 +1213,9 @@ export const CanvasEditor: React.FC = () => {
         />
       );
     }
+
+    // Duplicate image block handled above by KonvaImageNode:
+    // if (node.type === 'image') { ... }
 
     if (node.type === 'ellipse') {
       const rx = node.transform.width / 2;
@@ -841,13 +1274,26 @@ export const CanvasEditor: React.FC = () => {
     }
 
     if (node.type === 'line') {
+      const pathPoints = (node as any).points as number[] | undefined;
+      const isArrow = Boolean((node as any).arrow);
       return (
         <Line
           key={node.id}
           {...commonProps}
-          points={[0, 0, node.transform.width, node.transform.height || 0]}
+          points={
+            pathPoints && pathPoints.length >= 4
+              ? pathPoints
+              : [0, 0, node.transform.width, node.transform.height || 0]
+          }
           stroke={strokeProp || fillProp || '#3b82f6'}
           strokeWidth={strokeWidthProp || 2}
+          lineCap={pathPoints ? 'round' : 'butt'}
+          lineJoin={pathPoints ? 'round' : 'miter'}
+          hitStrokeWidth={Math.max(10, (strokeWidthProp || 2) * 3)}
+          pointerAtEnding={isArrow}
+          pointerLength={isArrow ? 10 : undefined}
+          pointerWidth={isArrow ? 10 : undefined}
+          fill={isArrow ? strokeProp || fillProp || '#3b82f6' : undefined}
         />
       );
     }
@@ -873,6 +1319,10 @@ export const CanvasEditor: React.FC = () => {
           text={(node as any).content !== undefined ? (node as any).content : 'Text'}
           fontSize={(node as any).fontSize || 16}
           fontFamily={(node as any).fontFamily || 'Inter'}
+          fontStyle={Number((node as any).fontWeight) >= 600 ? 'bold' : 'normal'}
+          align={(node as any).textAlign || 'left'}
+          lineHeight={(node as any).lineHeight ?? 1.25}
+          letterSpacing={(node as any).letterSpacing ?? 0}
           fill={fillProp}
           width={node.transform.width}
           onDblClick={(e) => {
@@ -1101,6 +1551,65 @@ export const CanvasEditor: React.FC = () => {
       );
     }
 
+    if (node.type === 'component' || node.type === 'instance') {
+      const children = getChildrenOf(node.id, document.nodes);
+      const childDocs = children.map((cid) => document.nodes[cid]).filter(Boolean);
+      let cX = node.transform.x;
+      let cY = node.transform.y;
+      let cW = node.transform.width;
+      let cH = node.transform.height;
+      if (childDocs.length > 0) {
+        const minX = Math.min(...childDocs.map((c) => c.transform.x));
+        const minY = Math.min(...childDocs.map((c) => c.transform.y));
+        const maxX = Math.max(...childDocs.map((c) => c.transform.x + c.transform.width));
+        const maxY = Math.max(...childDocs.map((c) => c.transform.y + c.transform.height));
+        cX = minX;
+        cY = minY;
+        cW = Math.max(5, maxX - minX);
+        cH = Math.max(5, maxY - minY);
+      }
+      const accent = node.type === 'component' ? '#a855f7' : '#0d99ff';
+      return (
+        <React.Fragment key={node.id}>
+          <Text
+            id={`header_${node.id}`}
+            x={cX}
+            y={cY - 16}
+            text={node.name}
+            fontSize={10}
+            fill={accent}
+            fontFamily="Inter"
+            onClick={(e) => {
+              if (isCreationTool || isPathTool) return;
+              e.cancelBubble = true;
+              setSelectedIds([node.id]);
+            }}
+          />
+          <Rect
+            {...commonProps}
+            x={cX}
+            y={cY}
+            width={cW}
+            height={cH}
+            fill="rgba(168, 85, 247, 0.06)"
+            stroke={accent}
+            strokeWidth={1 / zoom}
+            dash={[4 / zoom, 4 / zoom]}
+            hitFunc={(context, shape) => {
+              context.beginPath();
+              context.rect(0, 0, shape.width(), shape.height());
+              context.closePath();
+              context.fillStrokeShape(shape);
+            }}
+          />
+          {children.map((childId) => {
+            const childNode = document.nodes[childId];
+            return childNode ? renderNode(childNode) : null;
+          })}
+        </React.Fragment>
+      );
+    }
+
     if (node.type === 'group') {
       const children = getChildrenOf(node.id, document.nodes);
       const childDocs = children.map((cid) => document.nodes[cid]).filter(Boolean);
@@ -1129,7 +1638,7 @@ export const CanvasEditor: React.FC = () => {
             fill="#a1a1aa"
             fontFamily="Inter"
             onClick={(e) => {
-              if (isCreationTool) return;
+              if (isCreationTool || isPathTool || isCommentMode) return;
               e.cancelBubble = true;
               setSelectedIds([node.id]);
             }}
@@ -1163,8 +1672,13 @@ export const CanvasEditor: React.FC = () => {
   };
 
   const getCursorClass = () => {
+    if (isSpaceDown) return 'cursor-grabbing';
     if (activeTool === 'hand') return 'cursor-grab';
+    if (activeTool === 'pencil' || activeTool === 'pen') return 'cursor-crosshair';
+    if (activeTool === 'text') return 'cursor-text';
+    if (activeTool === 'scale') return 'cursor-nwse-resize';
     if (isCreationTool) return 'cursor-crosshair';
+    if (isCommentMode) return 'cursor-copy';
     return 'cursor-default';
   };
 
@@ -1181,11 +1695,35 @@ export const CanvasEditor: React.FC = () => {
         y={pan.y}
         scaleX={zoom}
         scaleY={zoom}
-        draggable={activeTool === 'hand'}
+        draggable={isPanningTool}
+        onDragMove={(e) => {
+          if (e.target !== stageRef.current) return;
+          setPan({ x: e.target.x(), y: e.target.y() });
+        }}
+        onDragEnd={(e) => {
+          if (e.target !== stageRef.current) return;
+          setPan({ x: Math.round(e.target.x()), y: Math.round(e.target.y()) });
+        }}
         onWheel={handleWheel}
         onMouseDown={handleStageMouseDown}
         onMouseMove={handleStageMouseMove}
         onMouseUp={handleStageMouseUp}
+        onDblClick={() => {
+          if (activeTool === 'pen') finishPenPath();
+        }}
+        onDblTap={() => {
+          if (activeTool === 'pen') finishPenPath();
+        }}
+        onContextMenu={(e) => {
+          if (e.target !== stageRef.current) return;
+          e.evt.preventDefault();
+          const rect = containerRef.current?.getBoundingClientRect();
+          setCanvasMenu({
+            x: e.evt.clientX - (rect?.left || 0),
+            y: e.evt.clientY - (rect?.top || 0),
+            nodeId: null,
+          });
+        }}
       >
         <Layer>
           {/*
@@ -1297,6 +1835,195 @@ export const CanvasEditor: React.FC = () => {
           );
         })}
 
+      {canvasMenu && (
+        <>
+          <div className="absolute inset-0 z-30" onClick={() => setCanvasMenu(null)} onContextMenu={(e) => e.preventDefault()} />
+          <div
+            style={{ top: Math.min(canvasMenu.y, Math.max(0, dimensions.height - 300)), left: Math.min(canvasMenu.x, Math.max(0, dimensions.width - 210)) }}
+            className="absolute z-40 w-52 bg-[#1f1f23] border border-[#2e2e33] rounded-lg shadow-2xl py-1 text-xs text-zinc-200"
+          >
+            {canvasMenu.nodeId ? (
+              <>
+                <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-500 truncate">
+                  {document.nodes[canvasMenu.nodeId]?.name || 'Layer'}
+                </div>
+                <button
+                  onClick={() => {
+                    copySelected();
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between"
+                >
+                  <span>Copy</span>
+                  <span className="text-[10px] text-zinc-400">Ctrl+C</span>
+                </button>
+                <button
+                  onClick={() => {
+                    duplicateSelected();
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between"
+                >
+                  <span>Duplicate</span>
+                  <span className="text-[10px] text-zinc-400">Ctrl+D</span>
+                </button>
+                <div className="h-px bg-[#2e2e33] my-1" />
+                <button
+                  onClick={() => {
+                    groupSelected();
+                    setCanvasMenu(null);
+                  }}
+                  disabled={selectedIds.length < 2}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <span>Group selection</span>
+                  <span className="text-[10px] text-zinc-400">Ctrl+G</span>
+                </button>
+                <button
+                  onClick={() => {
+                    ungroupSelected();
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between"
+                >
+                  <span>Ungroup</span>
+                  <span className="text-[10px] text-zinc-400">Ctrl+Shift+G</span>
+                </button>
+                <div className="h-px bg-[#2e2e33] my-1" />
+                <button
+                  onClick={() => {
+                    moveLayer(canvasMenu.nodeId as string, 'bring-to-front');
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white"
+                >
+                  Bring to front
+                </button>
+                <button
+                  onClick={() => {
+                    moveLayer(canvasMenu.nodeId as string, 'send-to-back');
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white"
+                >
+                  Send to back
+                </button>
+                <div className="h-px bg-[#2e2e33] my-1" />
+                <button
+                  onClick={() => {
+                    deleteSelected();
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-rose-600 hover:text-white text-rose-400 flex items-center justify-between"
+                >
+                  <span>Delete</span>
+                  <span className="text-[10px]">Del</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    pasteClipboard();
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between"
+                >
+                  <span>Paste</span>
+                  <span className="text-[10px] text-zinc-400">Ctrl+V</span>
+                </button>
+                <button
+                  onClick={() => {
+                    const page = document.pages[activePageId];
+                    setSelectedIds(page ? [...page.children] : []);
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between"
+                >
+                  <span>Select all</span>
+                  <span className="text-[10px] text-zinc-400">Ctrl+A</span>
+                </button>
+                <div className="h-px bg-[#2e2e33] my-1" />
+                <button
+                  onClick={() => {
+                    setActiveTool('select');
+                    setSelectedIds([]);
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white"
+                >
+                  Deselect
+                </button>
+                <button
+                  onClick={() => {
+                    zoomToFit();
+                    setCanvasMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-blue-600 hover:text-white flex items-center justify-between"
+                >
+                  <span>Zoom to fit</span>
+                  <span className="text-[10px] text-zinc-400">Shift+1</span>
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {isCommentMode && !pendingComment && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 rounded-full bg-[#0d99ff] text-white text-[11px] font-medium shadow-lg pointer-events-none">
+          Click anywhere on the canvas to drop a comment
+        </div>
+      )}
+
+      {pendingComment && (
+        <div
+          style={{
+            position: 'absolute',
+            left: `${pendingComment.x * zoom + pan.x}px`,
+            top: `${pendingComment.y * zoom + pan.y}px`,
+          }}
+          className="z-40 flex flex-col gap-1.5 w-60 p-2 rounded-xl bg-[#1c1c20] border border-zinc-700/80 shadow-2xl"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+              New comment
+            </span>
+            <button
+              onClick={() => {
+                setPendingComment(null);
+                setPendingCommentText('');
+              }}
+              className="text-[10px] text-zinc-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+          <input
+            autoFocus
+            value={pendingCommentText}
+            onChange={(e) => setPendingCommentText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitComment();
+              } else if (e.key === 'Escape') {
+                setPendingComment(null);
+                setPendingCommentText('');
+              }
+            }}
+            placeholder="Add a comment and press Enter"
+            className="bg-[#121214] border border-zinc-700 rounded px-2 py-1 text-[11px] text-white outline-none focus:border-blue-500"
+          />
+          <button
+            onClick={commitComment}
+            className="self-end text-[11px] px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium"
+          >
+            Post
+          </button>
+        </div>
+      )}
+
       {editingTextId && document.nodes[editingTextId] && (
         <textarea
           autoFocus
@@ -1316,6 +2043,10 @@ export const CanvasEditor: React.FC = () => {
             height: `${Math.max(20, document.nodes[editingTextId].transform.height * zoom + 4)}px`,
             fontSize: `${((document.nodes[editingTextId] as any).fontSize || 16) * zoom}px`,
             fontFamily: (document.nodes[editingTextId] as any).fontFamily || 'Inter',
+            fontWeight: (document.nodes[editingTextId] as any).fontWeight || 500,
+            fontStyle: 'normal',
+            textAlign: (document.nodes[editingTextId] as any).textAlign || 'left',
+            letterSpacing: `${((document.nodes[editingTextId] as any).letterSpacing || 0) * zoom}px`,
             color: document.nodes[editingTextId].fills.find((f) => f.visible !== false)?.color || '#ffffff',
             background: 'rgba(24, 24, 27, 0.9)',
             outline: '1.5px solid #3b82f6',
@@ -1324,7 +2055,7 @@ export const CanvasEditor: React.FC = () => {
             margin: '0px',
             resize: 'none',
             overflow: 'hidden',
-            lineHeight: 1.25,
+            lineHeight: (document.nodes[editingTextId] as any).lineHeight ?? 1.25,
             zIndex: 50,
           }}
         />
