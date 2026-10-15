@@ -73,7 +73,9 @@ import {
   Diamond,
   Check,
   ChevronDown,
+  Sparkles,
 } from 'lucide-react';
+import { AiDesignAgentModal } from '../ai/AiDesignAgentModal';
 
 export const ToolBar: React.FC = () => {
   const {
@@ -93,6 +95,8 @@ export const ToolBar: React.FC = () => {
   const [selectedShapeTool, setSelectedShapeTool] = useState<string>('rect');
   const [selectedFrameTool, setSelectedFrameTool] = useState<string>('frame');
   const [selectedDrawTool, setSelectedDrawTool] = useState<string>('pen');
+  const [selectedTextTool, setSelectedTextTool] = useState<string>('text');
+  const [showAiModal, setShowAiModal] = useState(false);
 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -209,6 +213,23 @@ const MediaIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+const TextIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3.5 5V3.5H12.5V5" />
+    <path d="M8 3.5V12.5" />
+    <path d="M5.5 12.5H10.5" />
+  </svg>
+);
+
+const TextOnPathIcon = ({ className }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 4.5V3H12V4.5" />
+    <path d="M8 3V9.5" />
+    <path d="M6 9.5H10" />
+    <path d="M3 13.5C5.5 11 10.5 11 13 13.5" />
+  </svg>
+);
+
   // Move Tools definitions
   const moveTools = [
     { id: 'select', label: 'Move', icon: MoveIcon, shortcut: 'V' },
@@ -240,6 +261,12 @@ const MediaIcon = ({ className }: { className?: string }) => (
     { id: 'pencil', label: 'Pencil', icon: Pencil, shortcut: 'Shift+P' },
   ];
 
+  // Text Tools definitions
+  const textTools = [
+    { id: 'text', label: 'Text', icon: TextIcon, shortcut: 'T' },
+    { id: 'textOnPath', label: 'Text on path', icon: TextOnPathIcon, shortcut: '' },
+  ];
+
   // Determine active icon for Move button
   const currentMoveTool = moveTools.find((t) => t.id === selectedMoveTool) || moveTools[0];
   const isMoveActive = activeTool === 'select' || activeTool === 'hand';
@@ -256,7 +283,10 @@ const MediaIcon = ({ className }: { className?: string }) => (
   // Determine active icon for Draw button
   const currentDrawTool = drawTools.find((t) => t.id === selectedDrawTool) || drawTools[0];
 
-  const isTextActive = activeTool === 'text';
+  // Determine active icon for Text button
+  const currentTextTool = textTools.find((t) => t.id === selectedTextTool) || textTools[0];
+
+  const isTextActive = activeTool === 'text' || activeTool === 'textOnPath';
 
   const toggleDropdown = (name: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -589,6 +619,7 @@ const MediaIcon = ({ className }: { className?: string }) => (
       </div>
 
       {/* 5. TEXT TOOL */}
+      {/*
       <div className="relative flex items-center">
         <button
           onClick={() => setActiveTool('text')}
@@ -611,6 +642,78 @@ const MediaIcon = ({ className }: { className?: string }) => (
         >
           <ChevronDown className="w-3 h-3 stroke-[2.5]" />
         </button>
+      </div>
+      */}
+      <div className="relative flex items-center">
+        <button
+          onClick={() => {
+            if (selectedTextTool === 'textOnPath') {
+              setActiveTool('textOnPath');
+            } else {
+              setActiveTool('text');
+            }
+          }}
+          className={`h-9 px-2 flex items-center justify-center rounded-lg transition-colors ${
+            isTextActive
+              ? 'bg-[#0d99ff] text-white'
+              : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900'
+          }`}
+          title={`${currentTextTool.label} (${currentTextTool.shortcut || 'T'})`}
+        >
+          <currentTextTool.icon className="w-4 h-4 stroke-[1.6]" />
+        </button>
+        <button
+          onClick={(e) => toggleDropdown('text', e)}
+          className={`h-9 px-1 flex items-center justify-center rounded-r-lg transition-colors -ml-1 ${
+            openDropdown === 'text'
+              ? 'bg-[#e5e5ea] text-zinc-900 rounded-md'
+              : isTextActive
+              ? 'text-white/80 hover:text-white'
+              : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'
+          }`}
+        >
+          <ChevronDown className="w-3 h-3 stroke-[2.5]" />
+        </button>
+
+        {openDropdown === 'text' && (
+          <div className="absolute bottom-full mb-2.5 left-0 bg-[#222222] text-white rounded-xl shadow-2xl py-1 px-1 min-w-[170px] border border-[#333333] z-50 text-xs">
+            {textTools.map((tool) => {
+              const isChecked = selectedTextTool === tool.id;
+              const isBlueActive = isChecked && isTextActive;
+              const ToolIcon = tool.icon;
+              return (
+                <button
+                  key={tool.id}
+                  onClick={() => {
+                    setSelectedTextTool(tool.id);
+                    if (tool.id === 'textOnPath') {
+                      setActiveTool('textOnPath');
+                    } else {
+                      setActiveTool('text');
+                    }
+                    setOpenDropdown(null);
+                  }}
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors cursor-pointer ${
+                    isBlueActive
+                      ? 'bg-[#0d99ff] text-white font-medium'
+                      : 'text-white hover:bg-[#2c2c2c]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 flex items-center justify-center">
+                      {isChecked && <Check className="w-3.5 h-3.5 text-white stroke-[2.5]" />}
+                    </div>
+                    <ToolIcon className="w-4 h-4 text-white" />
+                    <span className="font-medium text-white">{tool.label}</span>
+                  </div>
+                  <span className={`font-mono text-[11px] ml-4 ${isBlueActive ? 'text-white' : 'text-zinc-400'}`}>
+                    {tool.shortcut}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 6. COMMENTS TOOL */}
@@ -690,6 +793,22 @@ const MediaIcon = ({ className }: { className?: string }) => (
       >
         <Code2 className="w-4 h-4 stroke-[2]" />
       </button>
+
+      {/* DIVIDER */}
+      <div className="w-px h-6 bg-zinc-200 mx-1" />
+
+      {/* 9. AI DESIGN AGENT BUTTON */}
+      <button
+        onClick={() => setShowAiModal(true)}
+        className="h-9 px-2.5 flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600 via-indigo-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 text-white font-medium text-xs shadow-md shadow-indigo-500/25 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+        title="AI Design Agent (Prompt to UI Layout)"
+      >
+        <Sparkles className="w-4 h-4 fill-amber-300 stroke-amber-200 animate-pulse" />
+        <span className="font-semibold hidden sm:inline">AI Agent</span>
+      </button>
+
+      {/* AI DESIGN AGENT MODAL */}
+      <AiDesignAgentModal isOpen={showAiModal} onClose={() => setShowAiModal(false)} />
     </div>
   );
 };

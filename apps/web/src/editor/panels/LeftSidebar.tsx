@@ -98,7 +98,8 @@ export const LeftSidebar: React.FC = () => {
     reorderLayers,
   } = useEditorStore();
 
-  const activePage = document.pages[activePageId];
+  // const activePage = document.pages[activePageId];
+  const activePage = document?.pages ? document.pages[activePageId] : undefined;
   const nodeIds = activePage ? activePage.children : [];
 
   useEffect(() => {
@@ -190,6 +191,7 @@ export const LeftSidebar: React.FC = () => {
       case 'ellipse':
         return <Circle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
       case 'text':
+      case 'textOnPath':
         return <Type className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
       case 'star':
         return <Star className="w-3.5 h-3.5 text-amber-300 shrink-0" />;
@@ -521,7 +523,8 @@ export const LeftSidebar: React.FC = () => {
     );
   };
 
-  const pageEntries = Object.values(document.pages);
+  // const pageEntries = Object.values(document.pages);
+  const pageEntries = Object.values(document?.pages || {});
 
   return (
     <aside className="w-64 border-r border-[#27272a] bg-[#18181b] flex flex-col h-full select-none text-xs text-zinc-300 z-10 relative">

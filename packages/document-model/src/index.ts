@@ -131,6 +131,38 @@ export function createNode(type: NodeType, overrides: Partial<SceneNode> = {}): 
     } as SceneNode;
   }
 
+  if (type === 'textOnPath') {
+    const content = (overrides as any)?.content || 'Curved Text on Path';
+    const fontSize = (overrides as any)?.fontSize || 18;
+    const fontFamily = (overrides as any)?.fontFamily || 'Inter';
+    const fontWeight = (overrides as any)?.fontWeight || 500;
+    const radius = (overrides as any)?.radius || 80;
+    const arcAngle = (overrides as any)?.arcAngle || 270;
+    const startAngle = (overrides as any)?.startAngle || -225;
+
+    return {
+      ...baseDefaults,
+      name: 'Text on Path',
+      transform: {
+        x: overrides.transform?.x ?? 150,
+        y: overrides.transform?.y ?? 150,
+        width: overrides.transform?.width ?? radius * 2 + 40,
+        height: overrides.transform?.height ?? radius * 2 + 40,
+        rotation: overrides.transform?.rotation ?? 0,
+      },
+      fills: [{ id: createId('fill'), type: 'solid', color: '#000000', opacity: 1, visible: true }],
+      content,
+      fontFamily,
+      fontSize,
+      fontWeight,
+      radius,
+      innerRadius: radius - fontSize - 10,
+      arcAngle,
+      startAngle,
+      ...overrides,
+    } as SceneNode;
+  }
+
   if (type === 'ellipse') {
     return {
       ...baseDefaults,

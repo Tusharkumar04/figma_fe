@@ -1,10 +1,62 @@
 import React, { useRef, useEffect, useState } from 'react';
 // import { Stage, Layer, Rect, Circle, Text, Group, Transformer } from 'react-konva';
-import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line } from 'react-konva';
+// import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line } from 'react-konva';
+// import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line, Shape } from 'react-konva';
+import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Star, RegularPolygon, Line, Shape, Image as KonvaImage } from 'react-konva';
 import { useEditorStore } from '../../store/editorStore';
 import { SceneNode, NodeType, Point } from '@figma-app/shared-types';
 import { measureTextBounds } from '@figma-app/document-model';
 import Konva from 'konva';
+
+const KonvaImageNode: React.FC<{
+  node: SceneNode;
+  commonProps: any;
+  strokeProp?: string;
+  strokeWidthProp?: number;
+  cornerRadius?: number;
+}> = ({ node, commonProps, strokeProp, strokeWidthProp, cornerRadius = 0 }) => {
+  const [imageObj, setImageObj] = useState<HTMLImageElement | null>(null);
+  const imgUrl =
+    (node as any).src ||
+    (node as any).imageUrl ||
+    node.fills?.find((f: any) => f.type === 'image' && (f as any).imageUrl)?.imageUrl;
+
+  useEffect(() => {
+    if (!imgUrl) return;
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.src = imgUrl;
+    img.onload = () => setImageObj(img);
+  }, [imgUrl]);
+
+  if (!imageObj) {
+    return (
+      <Rect
+        key={node.id}
+        {...commonProps}
+        width={node.transform.width}
+        height={node.transform.height}
+        fill="#1e293b"
+        stroke={strokeProp || '#3b82f6'}
+        strokeWidth={strokeWidthProp || 1}
+        cornerRadius={cornerRadius}
+      />
+    );
+  }
+
+  return (
+    <KonvaImage
+      key={node.id}
+      {...commonProps}
+      image={imageObj}
+      width={node.transform.width}
+      height={node.transform.height}
+      stroke={strokeProp}
+      strokeWidth={strokeWidthProp}
+      cornerRadius={cornerRadius}
+    />
+  );
+};
 
 export const CanvasEditor: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -37,10 +89,11 @@ export const CanvasEditor: React.FC = () => {
     resolveComment,
   } = useEditorStore();
 
-  // const isCreationTool = ['frame', 'rect', 'ellipse', 'text'].includes(activeTool);
-  const isCreationTool = ['frame', 'rect', 'ellipse', 'text', 'star', 'polygon', 'line'].includes(activeTool);
+  // const isCreationTool = ['frame', 'rect', 'ellipse', 'text', 'star', 'polygon', 'line'].includes(activeTool);
+  const isCreationTool = ['frame', 'rect', 'ellipse', 'text', 'star', 'polygon', 'line', 'textOnPath'].includes(activeTool);
 
-  const activePage = document.pages[activePageId];
+  // const activePage = document.pages[activePageId];
+  const activePage = document?.pages ? document.pages[activePageId] : undefined;
   const nodeIds = activePage ? activePage.children : [];
 
   useEffect(() => {
@@ -314,6 +367,9 @@ export const CanvasEditor: React.FC = () => {
         const bounds = measureTextBounds(textContent, 20, 'Inter');
         width = bounds.width;
         height = bounds.height;
+      } else if (activeTool === 'textOnPath') {
+        width = 180;
+        height = 180;
       } else {
         width = 120;
         height = 120;
@@ -323,6 +379,10 @@ export const CanvasEditor: React.FC = () => {
       const bounds = measureTextBounds(textContent, 20, 'Inter');
       width = bounds.width;
       height = bounds.height;
+    } else if (activeTool === 'textOnPath') {
+      const size = Math.max(120, Math.min(width, height));
+      width = size;
+      height = size;
     }
 
     addNode(activeTool as NodeType, {
@@ -419,6 +479,22 @@ export const CanvasEditor: React.FC = () => {
       );
     }
 
+    if (activeTool === 'textOnPath') {
+      const size = Math.max(width, height);
+      return (
+        <Circle
+          x={x + size / 2}
+          y={y + size / 2}
+          radius={size / 2}
+          fill="rgba(59, 130, 246, 0.1)"
+          stroke="#0d99ff"
+          strokeWidth={1.5 / zoom}
+          dash={[4 / zoom, 4 / zoom]}
+          listening={false}
+        />
+      );
+    }
+
     if (activeTool === 'line') {
       return (
         <Line
@@ -475,10 +551,27 @@ export const CanvasEditor: React.FC = () => {
     const strokeProp = strokeObj?.color;
     const strokeWidthProp = strokeObj?.width;
 
+    const activeEffects = Array.isArray(node.effects) ? node.effects.filter((e) => e.visible !== false) : [];
+    const shadowEffect = activeEffects.find((e) => e.type === 'drop-shadow' || e.type === 'inner-shadow');
+    const shadowProps = shadowEffect
+      ? {
+          shadowColor: shadowEffect.color || 'rgba(0, 0, 0, 0.35)',
+          shadowBlur: shadowEffect.radius !== undefined ? shadowEffect.radius : 10,
+          shadowOffset: shadowEffect.offset || { x: 0, y: 4 },
+          shadowOpacity: 1,
+          shadowEnabled: true,
+        }
+      : {
+          shadowBlur: node.type === 'rect' ? 8 : 0,
+          shadowOpacity: node.type === 'rect' ? 0.08 : 0,
+          shadowEnabled: node.type === 'rect',
+        };
+
     const commonProps = {
       id: node.id,
       x: node.transform.x,
       y: node.transform.y,
+      ...shadowProps,
       draggable: !isLocked && activeTool === 'select',
       onClick: (e: any) => {
         if (isCreationTool) return;
@@ -659,6 +752,21 @@ export const CanvasEditor: React.FC = () => {
       */
     };
 
+    const imgFill = (node as any).src || (node as any).imageUrl || node.fills?.find((f: any) => f.type === 'image' && (f as any).imageUrl);
+
+    if (node.type === 'image' || (node.type === 'rect' && imgFill)) {
+      return (
+        <KonvaImageNode
+          key={node.id}
+          node={node}
+          commonProps={commonProps}
+          strokeProp={strokeProp}
+          strokeWidthProp={strokeWidthProp}
+          cornerRadius={typeof node.cornerRadius === 'number' ? node.cornerRadius : 0}
+        />
+      );
+    }
+
     if (node.type === 'rect') {
       return (
         <Rect
@@ -670,8 +778,8 @@ export const CanvasEditor: React.FC = () => {
           stroke={strokeProp}
           strokeWidth={strokeWidthProp}
           cornerRadius={typeof node.cornerRadius === 'number' ? node.cornerRadius : 0}
-          shadowBlur={12}
-          shadowOpacity={0.15}
+          // shadowBlur={12}
+          // shadowOpacity={0.15}
         />
       );
     }
@@ -775,6 +883,140 @@ export const CanvasEditor: React.FC = () => {
       );
     }
 
+    if (node.type === 'textOnPath') {
+      const isSelected = selectedIds.includes(node.id);
+      return (
+        <Shape
+          key={node.id}
+          {...commonProps}
+          width={node.transform.width}
+          height={node.transform.height}
+          onDblClick={(e) => {
+            e.cancelBubble = true;
+            setEditingTextId(node.id);
+          }}
+          hitFunc={(context: any, shape: any) => {
+            const width = node.transform.width;
+            const height = node.transform.height;
+            const cx = width / 2;
+            const cy = height / 2;
+            const baseRadius = (node as any).radius || Math.min(width, height) / 2 - 16;
+            const outerRadius = baseRadius + ((node as any).fontSize || 18) + 12;
+            context.beginPath();
+            context.arc(cx, cy, outerRadius, 0, Math.PI * 2);
+            context.fillShape(shape);
+          }}
+          sceneFunc={(context: any, shape: any) => {
+            const text = (node as any).content !== undefined ? (node as any).content : 'Type curved text...';
+            const fontSize = (node as any).fontSize || 18;
+            const fontFamily = (node as any).fontFamily || 'Inter';
+            const fontWeight = (node as any).fontWeight || 500;
+            const width = node.transform.width;
+            const height = node.transform.height;
+            const cx = width / 2;
+            const cy = height / 2;
+            const baseRadius = (node as any).radius || Math.min(width, height) / 2 - 16;
+            const innerRadius = (node as any).innerRadius || Math.max(10, baseRadius - fontSize - 8);
+            const outerRadius = baseRadius + fontSize / 2 + 6;
+            const arcAngle = (node as any).arcAngle || 270;
+            const startAngleDeg = (node as any).startAngle !== undefined ? (node as any).startAngle : -225;
+
+            const startAngleRad = (startAngleDeg * Math.PI) / 180;
+            const sweepRad = (arcAngle * Math.PI) / 180;
+            const endAngleRad = startAngleRad + sweepRad;
+
+            if (text.length > 0) {
+              context.save();
+              context.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+              context.fillStyle = fillProp && fillProp !== 'transparent' ? fillProp : '#000000';
+              context.textAlign = 'center';
+              context.textBaseline = 'middle';
+
+              const chars = text.split('');
+              const charWidths = chars.map((ch: string) => Math.max(4, context.measureText(ch).width));
+              const totalTextWidth = charWidths.reduce((a: number, b: number) => a + b, 0);
+              const arcLength = sweepRad * baseRadius;
+
+              if (totalTextWidth >= arcLength) {
+                const stepAngle = sweepRad / chars.length;
+                chars.forEach((ch: string, i: number) => {
+                  const charAngle = startAngleRad + (i + 0.5) * stepAngle;
+                  context.save();
+                  const px = cx + baseRadius * Math.cos(charAngle);
+                  const py = cy + baseRadius * Math.sin(charAngle);
+                  context.translate(px, py);
+                  context.rotate(charAngle + Math.PI / 2);
+                  context.fillText(ch, 0, 0);
+                  context.restore();
+                });
+              } else {
+                const charSpacing = (arcLength - totalTextWidth) / Math.max(1, chars.length);
+                let currentPos = charSpacing / 2;
+                chars.forEach((ch: string, i: number) => {
+                  const w = charWidths[i];
+                  const midPos = currentPos + w / 2;
+                  const charAngle = startAngleRad + (midPos / arcLength) * sweepRad;
+                  context.save();
+                  const px = cx + baseRadius * Math.cos(charAngle);
+                  const py = cy + baseRadius * Math.sin(charAngle);
+                  context.translate(px, py);
+                  context.rotate(charAngle + Math.PI / 2);
+                  context.fillText(ch, 0, 0);
+                  context.restore();
+                  currentPos += w + charSpacing;
+                });
+              }
+              context.restore();
+            }
+
+            if (isSelected) {
+              context.save();
+              context.strokeStyle = '#0d99ff';
+              context.lineWidth = 1.5;
+
+              context.beginPath();
+              context.arc(cx, cy, outerRadius, startAngleRad, endAngleRad, false);
+              context.stroke();
+
+              context.beginPath();
+              context.moveTo(cx + outerRadius * Math.cos(endAngleRad), cy + outerRadius * Math.sin(endAngleRad));
+              context.lineTo(cx + innerRadius * Math.cos(endAngleRad), cy + innerRadius * Math.sin(endAngleRad));
+              context.stroke();
+
+              context.beginPath();
+              context.arc(cx, cy, innerRadius, endAngleRad, startAngleRad, true);
+              context.stroke();
+
+              context.beginPath();
+              context.moveTo(cx + innerRadius * Math.cos(startAngleRad), cy + innerRadius * Math.sin(startAngleRad));
+              context.lineTo(cx + outerRadius * Math.cos(startAngleRad), cy + outerRadius * Math.sin(startAngleRad));
+              context.stroke();
+
+              context.beginPath();
+              context.setLineDash([4, 4]);
+              context.arc(cx, cy, baseRadius, endAngleRad, startAngleRad, false);
+              context.stroke();
+              context.setLineDash([]);
+
+              const handleX = cx + baseRadius * Math.cos(-Math.PI / 2);
+              const handleY = cy + baseRadius * Math.sin(-Math.PI / 2);
+              context.beginPath();
+              context.arc(handleX, handleY, 4, 0, Math.PI * 2);
+              context.fillStyle = '#ffffff';
+              context.fill();
+              context.strokeStyle = '#0d99ff';
+              context.lineWidth = 1.5;
+              context.stroke();
+
+              context.restore();
+            }
+
+            context.fillStrokeShape(shape);
+          }}
+        />
+      );
+    }
+
     /*
     if (node.type === 'frame') {
       return (
@@ -827,18 +1069,21 @@ export const CanvasEditor: React.FC = () => {
     }
     */
     if (node.type === 'frame') {
+      const isRootFrame = !node.parent || !document.nodes[node.parent];
       const children = getChildrenOf(node.id, document.nodes);
       return (
         <React.Fragment key={node.id}>
-          <Text
-            id={`header_${node.id}`}
-            x={node.transform.x}
-            y={node.transform.y - 18}
-            text={node.name}
-            fontSize={11}
-            fill="#94a3b8"
-            fontFamily="Inter"
-          />
+          {isRootFrame && (
+            <Text
+              id={`header_${node.id}`}
+              x={node.transform.x}
+              y={node.transform.y - 18}
+              text={node.name}
+              fontSize={11}
+              fill="#94a3b8"
+              fontFamily="Inter"
+            />
+          )}
           <Rect
             {...commonProps}
             width={node.transform.width}

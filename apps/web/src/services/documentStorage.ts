@@ -21,6 +21,7 @@ export function loadDocumentLocally(): DocumentModel | null {
   }
 }
 
+/*
 export async function saveDocumentToApi(doc: DocumentModel): Promise<boolean> {
   try {
     const res = await fetch(`http://localhost:4000/api/documents/${doc.id}`, {
@@ -40,6 +41,33 @@ export async function saveDocumentToApi(doc: DocumentModel): Promise<boolean> {
     return res.ok;
   } catch (err) {
     // API server may not be running in all client environments
+    return false;
+  }
+}
+*/
+export async function saveDocumentToApi(doc: DocumentModel): Promise<boolean> {
+  const apiUrl = (import.meta as any).env?.VITE_API_URL;
+  if (!apiUrl) {
+    // No remote API server configured; operating in offline/local storage mode
+    return false;
+  }
+
+  try {
+    const res = await fetch(`${apiUrl}/api/documents/${doc.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(doc),
+    });
+    if (!res.ok && res.status === 404) {
+      const createRes = await fetch(`${apiUrl}/api/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(doc),
+      });
+      return createRes.ok;
+    }
+    return res.ok;
+  } catch (err) {
     return false;
   }
 }

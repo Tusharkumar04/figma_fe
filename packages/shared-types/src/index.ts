@@ -1,7 +1,7 @@
 export type ID = string;
 
-// export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image';
-export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'star' | 'polygon';
+// export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'star' | 'polygon';
+export type ToolType = 'select' | 'hand' | 'frame' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'star' | 'polygon' | 'textOnPath';
 
 export interface Point {
   x: number;
@@ -56,9 +56,27 @@ export interface Stroke {
   dashPattern?: number[];
 }
 
+// export interface Effect {
+//   id: string;
+//   type: 'drop-shadow' | 'inner-shadow' | 'layer-blur' | 'background-blur';
+//   color?: string;
+//   offset?: Point;
+//   radius?: number;
+//   spread?: number;
+//   visible?: boolean;
+// }
 export interface Effect {
   id: string;
-  type: 'drop-shadow' | 'inner-shadow' | 'layer-blur' | 'background-blur';
+  type:
+    | 'drop-shadow'
+    | 'inner-shadow'
+    | 'layer-blur'
+    | 'background-blur'
+    | 'noise'
+    | 'texture'
+    | 'glass'
+    | 'shader'
+    | string;
   color?: string;
   offset?: Point;
   radius?: number;
@@ -66,8 +84,8 @@ export interface Effect {
   visible?: boolean;
 }
 
-// export type NodeType = 'page' | 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'component' | 'instance';
-export type NodeType = 'page' | 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'component' | 'instance' | 'star' | 'polygon';
+// export type NodeType = 'page' | 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'component' | 'instance' | 'star' | 'polygon';
+export type NodeType = 'page' | 'frame' | 'group' | 'rect' | 'ellipse' | 'line' | 'text' | 'image' | 'component' | 'instance' | 'star' | 'polygon' | 'textOnPath';
 
 export interface BaseNode {
   id: ID;
@@ -105,7 +123,7 @@ export interface ShapeNode extends BaseNode {
 }
 
 export interface TextNode extends BaseNode {
-  type: 'text';
+  type: 'text' | 'textOnPath';
   content: string;
   fontFamily: string;
   fontSize: number;
@@ -113,6 +131,11 @@ export interface TextNode extends BaseNode {
   textAlign?: 'left' | 'center' | 'right' | 'justify';
   letterSpacing?: number;
   lineHeight?: number;
+  radius?: number;
+  innerRadius?: number;
+  arcAngle?: number;
+  startAngle?: number;
+  isCurved?: boolean;
 }
 
 export interface ImageNode extends BaseNode {

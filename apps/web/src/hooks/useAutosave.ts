@@ -7,12 +7,32 @@ export const useAutosave = () => {
   const initialLoadDone = useRef(false);
 
   // Restore cached document on mount if available
+  // useEffect(() => {
+  //   if (!initialLoadDone.current) {
+  //     initialLoadDone.current = true;
+  //     const cached = loadDocumentLocally();
+  //     if (cached && cached.nodes && Object.keys(cached.nodes).length > 0) {
+  //       loadDocument(cached);
+  //     }
+  //   }
+  // }, [loadDocument]);
   useEffect(() => {
     if (!initialLoadDone.current) {
       initialLoadDone.current = true;
-      const cached = loadDocumentLocally();
-      if (cached && cached.nodes && Object.keys(cached.nodes).length > 0) {
-        loadDocument(cached);
+      try {
+        const cached = loadDocumentLocally();
+        if (
+          cached &&
+          cached.nodes &&
+          typeof cached.nodes === 'object' &&
+          cached.pages &&
+          typeof cached.pages === 'object' &&
+          Object.keys(cached.pages).length > 0
+        ) {
+          loadDocument(cached);
+        }
+      } catch (err) {
+        console.error('Failed to load local cached document:', err);
       }
     }
   }, [loadDocument]);
